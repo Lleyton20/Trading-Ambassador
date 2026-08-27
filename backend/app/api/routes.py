@@ -1,0 +1,269 @@
+"""
+REST API routes (spec section 35).
+
+Every route here is thin: it pulls candles from the injected
+MarketDataProvider, hands them to the pure functions in
+app/sessions/engine.py, app/smc/*, app/risk/* to do the actual analysis,
+and shapes the result into a response schema. No trading decision, no
+BUY/SELL signal, is ever emitted — per the spec's core principle, this
+platform presents evidence (structure, levels, RR math) and lets the
+person decide.
+"""
+from __future__ import annotations
+
+import pandas as pd
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from app.config import settings
+from app.instruments import INSTRUMENT_PROFILES, get_instrument_profile
+from app.market_data.base import MarketDataProvider
+from app.market_data.validation import validate_candles
+from app.risk.position_size import calculate_position_size
+from app.risk.risk_reward import calculate_risk_reward
+from app.schemas.analysis import (
+    CandleOut,
+    DailyLevelsOut,
+    MarketOverviewOut,
+    MarketSummary,
+    PositionSizeOut,
+    PositionSizeRequest,
+    RiskRewardOut,
+    RiskRewardRequest,
+    SessionRangeOut,
+    SmcAnalysisOut,
+    StructureEventOut,
+    SwingPointOut,
+)
+from app.sessions.engine import classify_price_vs_range, compute_daily_levels, compute_session_ranges
+from app.smc.structure import detect_structure_events
+from app.smc.swings import label_swing_sequence
+
+router = APIRouter()
+
+_SESSION_CONFIGS = {
+    "asian": ("asian_session_timezone", "asian_session_start_hour", "asian_session_end_hour"),
+    "london": ("london_session_timezone", "london_session_start_hour", "london_session_end_hour"),
+    "new_york": ("new_york_session_timezone", "new_york_session_start_hour", "new_york_session_end_hour"),
+}
+
+
+def _get_provider(request: Request) -> MarketDataProvider:
+    return request.app.state.provider
+
+
+def _require_known_symbol(symbol: str) -> None:
+    try:
+        get_instrument_profile(symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _fetch_valid_candles(provider: MarketDataProvider, symbol: str, timeframe: str, count: int) -> pd.DataFrame:
+    try:
+        df = provider.get_candles(symbol, timeframe, count=count)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    check = validate_candles(df)
+    if not check.is_valid:
+        # Surfaced, never silently swallowed (spec sections 36 & 39).
+        kinds = sorted({issue.kind for issue in check.issues})
+        raise HTTPException(status_code=502, detail=f"Data quality issues detected: {kinds}")
+    return df
+
+
+@router.get("/markets", response_model=list[MarketSummary])
+def list_markets(request: Request):
+    provider = _get_provider(request)
+    return [
+        MarketSummary(
+            symbol=symbol,
+            display_name=profile.display_name,
+            asset_class=profile.asset_class.value,
+            current_price=provider.get_latest_price(symbol),
+        )
+        for symbol, profile in INSTRUMENT_PROFILES.items()
+    ]
+
+
+@router.get("/markets/{symbol}/candles", response_model=list[CandleOut])
+def get_candles(symbol: str, request: Request, timeframe: str = Query("H1"), count: int = Query(200, le=2000)):
+    _require_known_symbol(symbol)
+    df = _fetch_valid_candles(_get_provider(request), symbol, timeframe, count)
+    return [
+        CandleOut(timestamp=ts, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
+        for ts, row in df.iterrows()
+    ]
+
+
+@router.get("/markets/{symbol}/daily-levels", response_model=DailyLevelsOut)
+def get_daily_levels(symbol: str, request: Request, timeframe: str = Query("M15")):
+    _require_known_symbol(symbol)
+    df = _fetch_valid_candles(_get_provider(request), symbol, timeframe, 500)
+
+    levels_df = compute_daily_levels(
+        df,
+        trading_day_timezone=settings.trading_day_timezone,
+        trading_day_rollover_hour=settings.trading_day_rollover_hour,
+    )
+    if levels_df.empty:
+        raise HTTPException(status_code=404, detail="Not enough candle data to compute daily levels")
+
+    last = levels_df.iloc[-1]
+    current_price = float(df["close"].iloc[-1])
+    status = classify_price_vs_range(current_price, float(last.opening_day_high), float(last.opening_day_low))
+
+    return DailyLevelsOut(
+        symbol=symbol,
+        trading_day=str(last.trading_day),
+        opening_price=float(last.opening_price),
+        opening_day_high=float(last.opening_day_high),
+        opening_day_low=float(last.opening_day_low),
+        previous_day_high=None if pd.isna(last.previous_day_high) else float(last.previous_day_high),
+        previous_day_low=None if pd.isna(last.previous_day_low) else float(last.previous_day_low),
+        current_price=current_price,
+        price_status=status,
+    )
+
+
+@router.get("/markets/{symbol}/sessions", response_model=list[SessionRangeOut])
+def get_sessions(symbol: str, request: Request, timeframe: str = Query("M15")):
+    _require_known_symbol(symbol)
+    df = _fetch_valid_candles(_get_provider(request), symbol, timeframe, 500)
+
+    output: list[SessionRangeOut] = []
+    for name, (tz_key, start_key, end_key) in _SESSION_CONFIGS.items():
+        ranges = compute_session_ranges(
+            df,
+            session_timezone=getattr(settings, tz_key),
+            start_hour=getattr(settings, start_key),
+            end_hour=getattr(settings, end_key),
+        )
+        if ranges.empty:
+            continue
+        last = ranges.iloc[-1]
+        output.append(
+            SessionRangeOut(
+                session_name=name,
+                session_date=str(last.session_date),
+                session_open=float(last.session_open),
+                session_high=float(last.session_high),
+                session_low=float(last.session_low),
+                session_close=float(last.session_close),
+                start_time=last.start_time,
+                end_time=last.end_time,
+            )
+        )
+    return output
+
+
+@router.get("/markets/{symbol}/smc", response_model=SmcAnalysisOut)
+def get_smc_analysis(symbol: str, request: Request, timeframe: str = Query("H1")):
+    _require_known_symbol(symbol)
+    df = _fetch_valid_candles(_get_provider(request), symbol, timeframe, 500)
+
+    swings = label_swing_sequence(df, lookback=settings.swing_lookback)
+    events, bias = detect_structure_events(df, swing_lookback=settings.swing_lookback)
+
+    return SmcAnalysisOut(
+        symbol=symbol,
+        timeframe=timeframe,
+        bias=bias,
+        swing_points=[SwingPointOut(**s) for s in swings[-20:]],
+        structure_events=[
+            StructureEventOut(
+                timestamp=e.timestamp, event_type=e.event_type, direction=e.direction,
+                price=e.price, broken_level=e.broken_level,
+            )
+            for e in events[-20:]
+        ],
+    )
+
+
+@router.get("/markets/{symbol}/analysis", response_model=MarketOverviewOut)
+def get_market_overview(symbol: str, request: Request):
+    """
+    The "Market Overview" the dashboard's top card needs: current price,
+    higher-timeframe bias, and today's key levels, in one call.
+    """
+    _require_known_symbol(symbol)
+    provider = _get_provider(request)
+
+    h1_df = _fetch_valid_candles(provider, symbol, "H1", 500)
+    _, bias = detect_structure_events(h1_df, swing_lookback=settings.swing_lookback)
+
+    daily_levels_out: DailyLevelsOut | None = None
+    m15_df = _fetch_valid_candles(provider, symbol, "M15", 500)
+    levels_df = compute_daily_levels(
+        m15_df,
+        trading_day_timezone=settings.trading_day_timezone,
+        trading_day_rollover_hour=settings.trading_day_rollover_hour,
+    )
+    current_price = provider.get_latest_price(symbol)
+    if not levels_df.empty:
+        last = levels_df.iloc[-1]
+        status = classify_price_vs_range(current_price, float(last.opening_day_high), float(last.opening_day_low))
+        daily_levels_out = DailyLevelsOut(
+            symbol=symbol,
+            trading_day=str(last.trading_day),
+            opening_price=float(last.opening_price),
+            opening_day_high=float(last.opening_day_high),
+            opening_day_low=float(last.opening_day_low),
+            previous_day_high=None if pd.isna(last.previous_day_high) else float(last.previous_day_high),
+            previous_day_low=None if pd.isna(last.previous_day_low) else float(last.previous_day_low),
+            current_price=current_price,
+            price_status=status,
+        )
+
+    sessions_out: list[SessionRangeOut] = []
+    for name, (tz_key, start_key, end_key) in _SESSION_CONFIGS.items():
+        ranges = compute_session_ranges(
+            m15_df,
+            session_timezone=getattr(settings, tz_key),
+            start_hour=getattr(settings, start_key),
+            end_hour=getattr(settings, end_key),
+        )
+        if ranges.empty:
+            continue
+        last = ranges.iloc[-1]
+        sessions_out.append(
+            SessionRangeOut(
+                session_name=name,
+                session_date=str(last.session_date),
+                session_open=float(last.session_open),
+                session_high=float(last.session_high),
+                session_low=float(last.session_low),
+                session_close=float(last.session_close),
+                start_time=last.start_time,
+                end_time=last.end_time,
+            )
+        )
+
+    return MarketOverviewOut(
+        symbol=symbol, current_price=current_price, bias=bias,
+        daily_levels=daily_levels_out, sessions=sessions_out,
+    )
+
+
+@router.post("/risk/risk-reward", response_model=RiskRewardOut)
+def post_risk_reward(payload: RiskRewardRequest):
+    try:
+        result = calculate_risk_reward(
+            payload.entry, payload.stop_loss, payload.take_profit,
+            min_acceptable_rr=payload.min_acceptable_rr or settings.min_acceptable_rr,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RiskRewardOut(**result.__dict__)
+
+
+@router.post("/risk/position-size", response_model=PositionSizeOut)
+def post_position_size(payload: PositionSizeRequest):
+    try:
+        instrument = get_instrument_profile(payload.symbol)
+        result = calculate_position_size(
+            payload.account_balance, payload.risk_pct, payload.entry_price, payload.stop_loss_price, instrument,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return PositionSizeOut(**result.__dict__)
