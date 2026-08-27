@@ -23,10 +23,15 @@ from app.risk.risk_reward import calculate_risk_reward
 from app.schemas.analysis import (
     CandleOut,
     DailyLevelsOut,
+    FairValueGapOut,
+    LiquidityAnalysisOut,
+    LiquidityLevelOut,
     MarketOverviewOut,
     MarketSummary,
+    OrderBlockOut,
     PositionSizeOut,
     PositionSizeRequest,
+    PremiumDiscountOut,
     RiskRewardOut,
     RiskRewardRequest,
     SessionRangeOut,
@@ -35,6 +40,12 @@ from app.schemas.analysis import (
     SwingPointOut,
 )
 from app.sessions.engine import classify_price_vs_range, compute_daily_levels, compute_session_ranges
+from app.smc.fvg import apply_mitigation as apply_fvg_mitigation
+from app.smc.fvg import detect_fair_value_gaps
+from app.smc.liquidity import LiquidityLevel, detect_sweep, find_equal_levels
+from app.smc.order_blocks import apply_mitigation as apply_ob_mitigation
+from app.smc.order_blocks import detect_order_blocks
+from app.smc.premium_discount import classify_premium_discount, determine_active_dealing_range
 from app.smc.structure import detect_structure_events
 from app.smc.swings import label_swing_sequence
 
@@ -159,11 +170,35 @@ def get_sessions(symbol: str, request: Request, timeframe: str = Query("M15")):
 
 @router.get("/markets/{symbol}/smc", response_model=SmcAnalysisOut)
 def get_smc_analysis(symbol: str, request: Request, timeframe: str = Query("H1")):
+    """
+    The full "SMC ANALYSIS" panel: structure/bias, order blocks, fair
+    value gaps, and premium/discount — all derived from the same
+    validated swing points and structure events (spec section 29).
+    """
     _require_known_symbol(symbol)
     df = _fetch_valid_candles(_get_provider(request), symbol, timeframe, 500)
 
     swings = label_swing_sequence(df, lookback=settings.swing_lookback)
     events, bias = detect_structure_events(df, swing_lookback=settings.swing_lookback)
+
+    order_blocks = detect_order_blocks(
+        df, events,
+        min_displacement_atr_multiple=settings.min_displacement_atr_mult,
+    )
+    apply_ob_mitigation(df, order_blocks)
+
+    gaps = detect_fair_value_gaps(df)
+    apply_fvg_mitigation(df, gaps)
+
+    premium_discount_out: PremiumDiscountOut | None = None
+    dealing_range = determine_active_dealing_range(swings)
+    if dealing_range is not None:
+        current_price = float(df["close"].iloc[-1])
+        status = classify_premium_discount(current_price, dealing_range)
+        premium_discount_out = PremiumDiscountOut(
+            range_high=dealing_range.range_high, range_low=dealing_range.range_low,
+            equilibrium=dealing_range.equilibrium, status=status,
+        )
 
     return SmcAnalysisOut(
         symbol=symbol,
@@ -177,7 +212,67 @@ def get_smc_analysis(symbol: str, request: Request, timeframe: str = Query("H1")
             )
             for e in events[-20:]
         ],
+        order_blocks=[
+            OrderBlockOut(
+                direction=ob.direction, zone_low=ob.zone_low, zone_high=ob.zone_high,
+                created_at=ob.created_at, structure_event_type=ob.structure_event_type,
+                mitigated=ob.mitigated, mitigated_at=ob.mitigated_at, retest_count=ob.retest_count,
+            )
+            for ob in order_blocks[-20:]
+        ],
+        fair_value_gaps=[
+            FairValueGapOut(
+                direction=g.direction, upper=g.upper, lower=g.lower,
+                created_at=g.created_at, mitigated_pct=g.mitigated_pct,
+            )
+            for g in gaps[-20:]
+        ],
+        premium_discount=premium_discount_out,
     )
+
+
+@router.get("/markets/{symbol}/liquidity", response_model=LiquidityAnalysisOut)
+def get_liquidity_analysis(symbol: str, request: Request, timeframe: str = Query("H1")):
+    """
+    Liquidity levels (swing-based equal highs/lows plus previous-day
+    high/low) with each level's sweep status (spec sections 5, 6, 11, 12).
+    """
+    _require_known_symbol(symbol)
+    provider = _get_provider(request)
+    df = _fetch_valid_candles(provider, symbol, timeframe, 500)
+
+    swings = label_swing_sequence(df, lookback=settings.swing_lookback)
+    levels: list[LiquidityLevel] = find_equal_levels(
+        swings, tolerance_pct=settings.liquidity_tolerance_pct, kind="high"
+    ) + find_equal_levels(swings, tolerance_pct=settings.liquidity_tolerance_pct, kind="low")
+
+    # Previous Day High/Low, once known, are liquidity levels too.
+    daily_df = _fetch_valid_candles(provider, symbol, "M15", 500)
+    daily_levels_df = compute_daily_levels(
+        daily_df,
+        trading_day_timezone=settings.trading_day_timezone,
+        trading_day_rollover_hour=settings.trading_day_rollover_hour,
+    )
+    if not daily_levels_df.empty:
+        last = daily_levels_df.iloc[-1]
+        current_day_rows = daily_levels_df[daily_levels_df["trading_day"] == last.trading_day]
+        known_since = current_day_rows.index.min()  # PDH/PDL become known at today's open
+        if pd.notna(last.previous_day_high):
+            levels.append(LiquidityLevel(label="previous_day_high", kind="high", price=float(last.previous_day_high), formed_at=known_since))
+        if pd.notna(last.previous_day_low):
+            levels.append(LiquidityLevel(label="previous_day_low", kind="low", price=float(last.previous_day_low), formed_at=known_since))
+
+    levels_out: list[LiquidityLevelOut] = []
+    for level in levels:
+        sweep = detect_sweep(df, level)
+        levels_out.append(
+            LiquidityLevelOut(
+                label=level.label, kind=level.kind, price=level.price, formed_at=level.formed_at,
+                swept=sweep is not None, swept_at=sweep.swept_at if sweep else None,
+            )
+        )
+
+    return LiquidityAnalysisOut(symbol=symbol, timeframe=timeframe, levels=levels_out)
 
 
 @router.get("/markets/{symbol}/analysis", response_model=MarketOverviewOut)

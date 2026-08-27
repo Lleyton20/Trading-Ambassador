@@ -28,12 +28,15 @@ trading-ambassador/
 │   │   ├── instruments.py       # explicit per-symbol specs (pip size, contract size, ...)
 │   │   ├── database.py          # SQLAlchemy engine/session (SQLite dev, Postgres-ready)
 │   │   ├── models/              # DB tables: instruments, candles, swing_points,
-│   │   │                        #   market_structure_events, sessions, daily_levels
+│   │   │                        #   market_structure_events, order_blocks,
+│   │   │                        #   fair_value_gaps, liquidity_levels/sweeps,
+│   │   │                        #   sessions, daily_levels
 │   │   ├── schemas/              # Pydantic request/response shapes for the API
 │   │   ├── market_data/          # MarketDataProvider interface + a deterministic
 │   │   │                        #   dev fixture provider + OHLC data-quality checks
 │   │   ├── sessions/              # Asian/London/New York sessions, ODH/ODL, PDH/PDL
-│   │   ├── smc/                  # swing points, HH/HL/LH/LL, BOS/CHoCH detection
+│   │   ├── smc/                  # swings, HH/HL/LH/LL, BOS/CHoCH, order blocks,
+│   │   │                        #   fair value gaps, liquidity sweeps, premium/discount
 │   │   ├── risk/                 # risk:reward calculator, position size calculator
 │   │   └── api/                  # FastAPI routes tying the above together
 │   ├── tests/                    # pytest, deterministic hand-verified fixtures
@@ -42,13 +45,12 @@ trading-ambassador/
 └── README.md
 ```
 
-Frontend, order blocks / fair value gaps / liquidity sweeps, news
-intelligence, backtesting, and the trade journal are **not built yet** —
-see "Roadmap" below. This is intentional: the spec this project follows
-is explicit that building everything at once produces an unreviewable
-mess. Each phase ships as a working, tested slice.
+Frontend, news intelligence, backtesting, and the trade journal are **not
+built yet** — see "Roadmap" below. This is intentional: the spec this
+project follows is explicit that building everything at once produces an
+unreviewable mess. Each phase ships as a working, tested slice.
 
-## What's working right now (Milestone 1)
+## What's working right now (Milestones 1-2)
 
 - **Market data layer**: a `MarketDataProvider` interface (spec-style
   vendor abstraction) with a deterministic synthetic-data provider for
@@ -67,13 +69,29 @@ mess. Each phase ships as a working, tested slice.
   an explicit, documented algorithmic definition for each (candle-close
   confirmation, not wick touches) — see `app/smc/structure.py`'s
   docstring for the reasoning.
+- **Order blocks**: created only from a confirmed BOS/CHoCH whose
+  confirming candle clears a displacement threshold (ATR-relative, so it
+  scales sensibly between low-volatility Forex and spiky synthetic
+  indices) — not from "the last opposite candle" indiscriminately.
+  Tracks mitigation state and retest count.
+- **Fair Value Gaps**: three-candle detection with a mitigation
+  *percentage* (not just filled/unfilled), so a partially-filled gap is
+  reported as such.
+- **Liquidity**: equal-highs/equal-lows clustering with a percentage-of-
+  price tolerance (never exact float equality), plus Previous Day
+  High/Low as liquidity levels. Each level reports whether it's been
+  swept — defined as a wick beyond the level followed by a candle
+  closing back through it, not merely touching it.
+- **Premium/Discount**: the active dealing range from the most recent
+  confirmed swing high/low, with price classified as premium, discount,
+  or equilibrium.
 - **Risk:Reward & position sizing**: RR calculator with a configurable
   minimum-quality threshold, and a position-size calculator driven by
   each instrument's real contract size/lot rules instead of a guessed
   constant.
 - **REST API** (FastAPI) wiring all of the above into real endpoints —
   see below.
-- **19 passing tests** against hand-verified, deterministic fixtures
+- **36 passing tests** against hand-verified, deterministic fixtures
   (not just "it ran without crashing").
 
 ## Key design decisions
@@ -127,6 +145,7 @@ Then visit `http://127.0.0.1:8000/docs` for interactive API docs, or try:
 curl http://127.0.0.1:8000/api/markets
 curl "http://127.0.0.1:8000/api/markets/EURUSD/analysis"
 curl "http://127.0.0.1:8000/api/markets/CRASH500/smc?timeframe=H1"
+curl "http://127.0.0.1:8000/api/markets/EURUSD/liquidity?timeframe=H1"
 ```
 
 ## Testing
@@ -136,7 +155,7 @@ cd backend
 python -m pytest -v
 ```
 
-## API endpoints (Milestone 1)
+## API endpoints (Milestones 1-2)
 
 | Endpoint | Purpose |
 |---|---|
@@ -144,7 +163,8 @@ python -m pytest -v
 | `GET /api/markets/{symbol}/candles` | Historical candles for a timeframe |
 | `GET /api/markets/{symbol}/daily-levels` | ODH/ODL, PDH/PDL, price status |
 | `GET /api/markets/{symbol}/sessions` | Asian/London/NY session ranges |
-| `GET /api/markets/{symbol}/smc` | Swing points, bias, BOS/CHoCH events |
+| `GET /api/markets/{symbol}/smc` | Bias, BOS/CHoCH, order blocks, FVGs, premium/discount |
+| `GET /api/markets/{symbol}/liquidity` | Equal highs/lows + PDH/PDL, each with sweep status |
 | `GET /api/markets/{symbol}/analysis` | Combined dashboard "overview" payload |
 | `POST /api/risk/risk-reward` | RR calculation + quality classification |
 | `POST /api/risk/position-size` | Position size from account/risk/instrument |
@@ -159,12 +179,12 @@ never used as a stand-in for real market data claims. A real provider
 
 ## Roadmap
 
-- **Milestone 2**: Liquidity (equal highs/lows, sweeps of session/swing
-  levels), Order Blocks (evidence-linked, with mitigation tracking), Fair
-  Value Gaps, Premium/Discount — completing the SMC engine.
-- **Milestone 3**: Confluence scoring engine; a real market-data provider
-  (MT5 or Deriv API) behind the existing `MarketDataProvider` interface;
-  Alembic migrations to replace `create_all()`.
+- **Milestone 3**: Confluence scoring engine (configurable weights already
+  reserved in `app/config.py`); a real market-data provider (MT5 or Deriv
+  API) behind the existing `MarketDataProvider` interface; Alembic
+  migrations to replace `create_all()`; persist SMC results (order blocks,
+  FVGs, liquidity levels/sweeps) to the DB tables that already exist for
+  them instead of only computing them on request.
 - **Milestone 4**: News intelligence engine + economic calendar.
 - **Milestone 5**: Backtesting engine (explicitly designed to reuse the
   same non-lookahead-safe functions already in `sessions/engine.py` and
@@ -177,6 +197,11 @@ never used as a stand-in for real market data claims. A real provider
 - No database migrations yet (`Base.metadata.create_all()` is used for
   local dev). Alembic is the natural next step once real data starts
   living in the tables.
+- Order blocks, FVGs, and liquidity levels/sweeps have DB tables
+  (`app/models/smc.py`, `app/models/liquidity.py`) but the API currently
+  computes them fresh on every request rather than persisting/reading
+  them — fine for a stateless dev fixture, but worth revisiting once a
+  real data provider is wired in (Milestone 3).
 - Session range detection assumes a session's local hours don't cross
   midnight (true for the three default sessions; documented in
   `sessions/engine.py`).

@@ -45,12 +45,50 @@ class StructureEventOut(BaseModel):
     broken_level: float
 
 
+class OrderBlockOut(BaseModel):
+    direction: str
+    zone_low: float
+    zone_high: float
+    created_at: datetime
+    structure_event_type: str
+    mitigated: bool
+    mitigated_at: datetime | None
+    retest_count: int
+
+
+class FairValueGapOut(BaseModel):
+    direction: str
+    upper: float
+    lower: float
+    created_at: datetime
+    mitigated_pct: float
+
+
+class LiquidityLevelOut(BaseModel):
+    label: str
+    kind: str
+    price: float
+    formed_at: datetime
+    swept: bool
+    swept_at: datetime | None
+
+
+class PremiumDiscountOut(BaseModel):
+    range_high: float
+    range_low: float
+    equilibrium: float
+    status: str  # "premium" | "discount" | "equilibrium"
+
+
 class SmcAnalysisOut(BaseModel):
     symbol: str
     timeframe: str
     bias: str
     swing_points: list[SwingPointOut]
     structure_events: list[StructureEventOut]
+    order_blocks: list[OrderBlockOut]
+    fair_value_gaps: list[FairValueGapOut]
+    premium_discount: PremiumDiscountOut | None
 
 
 class DailyLevelsOut(BaseModel):
@@ -112,3 +150,9 @@ class PositionSizeOut(BaseModel):
     stop_distance: float
     raw_position_size: float
     position_size: float
+
+
+class LiquidityAnalysisOut(BaseModel):
+    symbol: str
+    timeframe: str
+    levels: list[LiquidityLevelOut]
