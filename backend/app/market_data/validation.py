@@ -72,7 +72,7 @@ def validate_candles(df: pd.DataFrame, *, max_price_jump_pct: float = 0.25) -> V
     for idx in invalid_ohlc.index:
         result.issues.append(ValidationIssue("invalid_ohlc_relationship", "high/low do not bound open/close", index=idx))
 
-    pct_change = df["close"].pct_change().abs()
+    pct_change = df["close"].pct_change(fill_method=None).abs()
     extreme = pct_change[pct_change > max_price_jump_pct]
     for idx in extreme.index:
         result.issues.append(

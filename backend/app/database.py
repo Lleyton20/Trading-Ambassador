@@ -16,6 +16,7 @@ has its first real consumer (see README "Known gaps").
 from __future__ import annotations
 
 from collections.abc import Generator
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -23,6 +24,13 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from app.config import settings
 
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+
+if settings.database_url.startswith("sqlite:///") and settings.database_url != "sqlite:///:memory:":
+    # Make sure the SQLite file's parent directory exists (e.g. the
+    # default ~/.trading_ambassador/) — SQLite won't create it for us.
+    db_path = Path(settings.database_url.removeprefix("sqlite:///"))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
 engine = create_engine(settings.database_url, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

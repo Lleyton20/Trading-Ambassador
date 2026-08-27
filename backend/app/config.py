@@ -26,7 +26,21 @@ need to be hard-coded — see `.env.example` for the full list.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The SQLite dev database deliberately lives OUTSIDE the project folder,
+# under the user's home directory, rather than at a relative path like
+# "./trading_ambassador.db". Reason: a relative path resolves inside
+# wherever the project folder happens to sit, and on this machine (as on
+# many Macs) that can be Desktop or Documents — folders commonly synced
+# by iCloud Drive or another cloud-sync tool. SQLite's file locking is
+# well known to fail with "disk I/O error" inside a cloud-synced folder,
+# because the sync daemon's own file coordination conflicts with SQLite's
+# locks. Keeping the .db file in a plain, non-synced local directory
+# sidesteps that entirely, independent of where the project itself lives.
+_DEFAULT_SQLITE_PATH = Path.home() / ".trading_ambassador" / "trading_ambassador.db"
 
 
 class Settings(BaseSettings):
@@ -36,7 +50,7 @@ class Settings(BaseSettings):
     # Defaults to a local SQLite file so the project runs with zero setup.
     # Point this at a real Postgres instance in production by setting
     # DATABASE_URL, e.g. postgresql+psycopg://user:pass@host:5432/trading_ambassador
-    database_url: str = "sqlite:///./trading_ambassador.db"
+    database_url: str = f"sqlite:///{_DEFAULT_SQLITE_PATH}"
 
     # --- Trading day / timezone ----------------------------------------
     # This is the single most important "hidden assumption" the spec calls

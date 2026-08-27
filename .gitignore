@@ -28,3 +28,4 @@ Thumbs.db
 
 # Scratch (files staged for manual deletion by the user)
 _to_delete/
+*.db-journal
