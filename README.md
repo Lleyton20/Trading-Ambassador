@@ -23,20 +23,23 @@ predictions, and historical behavior does not guarantee future results.
 ```
 trading-ambassador/
 ├── backend/
+│   ├── alembic/                  # schema migrations (see database.py for why)
 │   ├── app/
 │   │   ├── config.py            # ALL tunable parameters, one place (see file for why)
 │   │   ├── instruments.py       # explicit per-symbol specs (pip size, contract size, ...)
 │   │   ├── database.py          # SQLAlchemy engine/session (SQLite dev, Postgres-ready)
+│   │   ├── persistence.py        # upserts computed SMC results into their DB tables
 │   │   ├── models/              # DB tables: instruments, candles, swing_points,
 │   │   │                        #   market_structure_events, order_blocks,
 │   │   │                        #   fair_value_gaps, liquidity_levels/sweeps,
 │   │   │                        #   sessions, daily_levels
 │   │   ├── schemas/              # Pydantic request/response shapes for the API
-│   │   ├── market_data/          # MarketDataProvider interface + a deterministic
-│   │   │                        #   dev fixture provider + OHLC data-quality checks
+│   │   ├── market_data/          # MarketDataProvider interface, a deterministic dev
+│   │   │                        #   fixture, a live Deriv API provider, OHLC checks
 │   │   ├── sessions/              # Asian/London/New York sessions, ODH/ODL, PDH/PDL
 │   │   ├── smc/                  # swings, HH/HL/LH/LL, BOS/CHoCH, order blocks,
 │   │   │                        #   fair value gaps, liquidity sweeps, premium/discount
+│   │   ├── confluence/            # weighted confluence scoring across the above
 │   │   ├── risk/                 # risk:reward calculator, position size calculator
 │   │   └── api/                  # FastAPI routes tying the above together
 │   ├── tests/                    # pytest, deterministic hand-verified fixtures
@@ -45,12 +48,12 @@ trading-ambassador/
 └── README.md
 ```
 
-Frontend, news intelligence, backtesting, and the trade journal are **not
-built yet** — see "Roadmap" below. This is intentional: the spec this
-project follows is explicit that building everything at once produces an
-unreviewable mess. Each phase ships as a working, tested slice.
+Frontend, news intelligence, and backtesting are **not built yet** — see
+"Roadmap" below. This is intentional: the spec this project follows is
+explicit that building everything at once produces an unreviewable mess.
+Each phase ships as a working, tested slice.
 
-## What's working right now (Milestones 1-2)
+## What's working right now (Milestones 1-3)
 
 - **Market data layer**: a `MarketDataProvider` interface (spec-style
   vendor abstraction) with a deterministic synthetic-data provider for
@@ -89,9 +92,25 @@ unreviewable mess. Each phase ships as a working, tested slice.
   minimum-quality threshold, and a position-size calculator driven by
   each instrument's real contract size/lot rules instead of a guessed
   constant.
+- **Live market data**: a `DerivMarketDataProvider` alongside the mock
+  fixture, backed by Deriv's public WebSocket API — covers both Forex
+  majors and the synthetic indices from one connection, no API token
+  required. Switch to it with `MARKET_DATA_PROVIDER=deriv`; see
+  `app/market_data/deriv_provider.py`.
+- **Persistence**: swing points, structure events, order blocks, FVGs,
+  and liquidity levels/sweeps are upserted into their DB tables as a side
+  effect of the `/smc` and `/liquidity` endpoints (`app/persistence.py`)
+  — every response is still computed fresh from live candles, the DB
+  write is an audit trail for later milestones (backtesting, journal).
+- **Confluence scoring**: combines HTF bias alignment, liquidity sweeps,
+  CHoCH, FVGs, order blocks, premium/discount, and session timing into a
+  single weighted score against the weights in `app/config.py`
+  (`app/confluence/engine.py`) — still evidence, not a signal.
+- **Schema migrations**: Alembic (`backend/alembic/`), reading
+  `DATABASE_URL` from the same `Settings` object as the rest of the app.
 - **REST API** (FastAPI) wiring all of the above into real endpoints —
   see below.
-- **36 passing tests** against hand-verified, deterministic fixtures
+- **47 passing tests** against hand-verified, deterministic fixtures
   (not just "it ran without crashing").
 
 ## Key design decisions
@@ -101,9 +120,11 @@ unreviewable mess. Each phase ships as a working, tested slice.
   auto-trading bot. Analysis and backtesting must be validated long
   before live execution is even considered.
 - **Every module talks to a `MarketDataProvider` interface**, never a
-  concrete broker client. A dev fixture (`mock_provider.py`) implements
-  it today; a real MT5 or Deriv API connection is a drop-in replacement
-  later without touching the session/SMC/risk code.
+  concrete broker client. A dev fixture (`mock_provider.py`) and a live
+  Deriv API provider (`deriv_provider.py`) both implement it; switching
+  between them is a one-line change in `app/main.py`, nothing in the
+  session/SMC/risk code cares which one is active. Deriv was chosen over
+  MetaTrader 5 because MT5's official Python package is Windows-only.
 - **One `Settings` object holds every tunable parameter** (`app/config.py`)
   — nothing is hard-coded inside detection logic.
 - **BOS and CHoCH have distinct, explicit definitions**: BOS is a candle
@@ -130,6 +151,7 @@ cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # optional — every setting has a safe default
+alembic upgrade head    # creates the local SQLite schema
 ```
 
 ## Running the backend
@@ -146,7 +168,12 @@ curl http://127.0.0.1:8000/api/markets
 curl "http://127.0.0.1:8000/api/markets/EURUSD/analysis"
 curl "http://127.0.0.1:8000/api/markets/CRASH500/smc?timeframe=H1"
 curl "http://127.0.0.1:8000/api/markets/EURUSD/liquidity?timeframe=H1"
+curl "http://127.0.0.1:8000/api/markets/EURUSD/confluence?timeframe=H1"
 ```
+
+To use live Deriv data instead of the mock fixture, set
+`MARKET_DATA_PROVIDER=deriv` in `.env` (or the environment) before
+starting the server — no API token needed, see "Data sources" below.
 
 ## Testing
 
@@ -155,7 +182,7 @@ cd backend
 python -m pytest -v
 ```
 
-## API endpoints (Milestones 1-2)
+## API endpoints (Milestones 1-3)
 
 | Endpoint | Purpose |
 |---|---|
@@ -165,26 +192,24 @@ python -m pytest -v
 | `GET /api/markets/{symbol}/sessions` | Asian/London/NY session ranges |
 | `GET /api/markets/{symbol}/smc` | Bias, BOS/CHoCH, order blocks, FVGs, premium/discount |
 | `GET /api/markets/{symbol}/liquidity` | Equal highs/lows + PDH/PDL, each with sweep status |
+| `GET /api/markets/{symbol}/confluence` | Weighted confluence score + per-factor breakdown |
 | `GET /api/markets/{symbol}/analysis` | Combined dashboard "overview" payload |
 | `POST /api/risk/risk-reward` | RR calculation + quality classification |
 | `POST /api/risk/position-size` | Position size from account/risk/instrument |
 
 ## Data sources
 
-Milestone 1 ships with a deterministic **synthetic data fixture**
-(`app/market_data/mock_provider.py`), clearly labeled as such in code and
-never used as a stand-in for real market data claims. A real provider
-(MetaTrader 5, Deriv's WebSocket API, or another vendor) is a drop-in
-`MarketDataProvider` implementation away — see that file's docstring.
+`app/market_data/mock_provider.py` is a deterministic **synthetic data
+fixture** — clearly labeled as such in code, never used as a stand-in for
+real market data claims, and still the default (`MARKET_DATA_PROVIDER=mock`)
+so the project runs with zero setup. `app/market_data/deriv_provider.py`
+is a live provider backed by Deriv's public WebSocket API: it covers both
+Forex majors and Deriv's synthetic indices from one connection, and needs
+no API token for market data (only a public `app_id`, defaulted to
+Deriv's own demo id). Enable it with `MARKET_DATA_PROVIDER=deriv`.
 
 ## Roadmap
 
-- **Milestone 3**: Confluence scoring engine (configurable weights already
-  reserved in `app/config.py`); a real market-data provider (MT5 or Deriv
-  API) behind the existing `MarketDataProvider` interface; Alembic
-  migrations to replace `create_all()`; persist SMC results (order blocks,
-  FVGs, liquidity levels/sweeps) to the DB tables that already exist for
-  them instead of only computing them on request.
 - **Milestone 4**: News intelligence engine + economic calendar.
 - **Milestone 5**: Backtesting engine (explicitly designed to reuse the
   same non-lookahead-safe functions already in `sessions/engine.py` and
@@ -194,14 +219,12 @@ never used as a stand-in for real market data claims. A real provider
 
 ## Known gaps (intentional, tracked)
 
-- No database migrations yet (`Base.metadata.create_all()` is used for
-  local dev). Alembic is the natural next step once real data starts
-  living in the tables.
-- Order blocks, FVGs, and liquidity levels/sweeps have DB tables
-  (`app/models/smc.py`, `app/models/liquidity.py`) but the API currently
-  computes them fresh on every request rather than persisting/reading
-  them — fine for a stateless dev fixture, but worth revisiting once a
-  real data provider is wired in (Milestone 3).
+- Persisted SMC rows are an audit trail, not yet read back by anything —
+  the API always computes its response fresh from live candles. Reading
+  historical rows back is a natural fit for the backtester (Milestone 5).
+- Raw candles aren't persisted yet, only the SMC results derived from
+  them (`app/models/candle.py`'s table exists but nothing writes to it) —
+  intentionally out of Milestone 3's scope; revisit alongside Milestone 5.
 - Session range detection assumes a session's local hours don't cross
   midnight (true for the three default sessions; documented in
   `sessions/engine.py`).

@@ -7,11 +7,13 @@ same models work unmodified against PostgreSQL once `DATABASE_URL` is
 pointed at a real Postgres instance (per spec section 27, Postgres is the
 target production database).
 
-NOTE on migrations: the spec calls for proper migrations rather than
-`create_all()` in production. This milestone uses `create_all()` for local
-development speed (single command, no migration tooling to install yet).
-Introducing Alembic is flagged as a near-term follow-up once the schema
-has its first real consumer (see README "Known gaps").
+NOTE on migrations: schema changes go through Alembic (`backend/alembic/`,
+`alembic upgrade head`) — see that directory's `env.py`, which reads its
+DB URL from `settings.database_url` rather than a static `alembic.ini`
+value, same as everything else in this app. `init_db()` below still uses
+`create_all()`, but only for throwaway/in-memory test databases now; the
+app's own startup no longer calls it, so Alembic-managed schema and
+`create_all()` never fight over the same tables.
 """
 from __future__ import annotations
 
@@ -49,7 +51,9 @@ def get_db() -> Generator:
 
 
 def init_db() -> None:
-    """Create all tables. Call once at startup for local/dev use."""
+    """Create all tables directly, bypassing Alembic - for a throwaway or
+    in-memory test database only. The running app uses `alembic upgrade
+    head` instead (see module docstring)."""
     from app import models  # noqa: F401  (ensures models are registered on Base)
 
     Base.metadata.create_all(bind=engine)

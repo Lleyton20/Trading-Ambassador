@@ -156,3 +156,21 @@ class LiquidityAnalysisOut(BaseModel):
     symbol: str
     timeframe: str
     levels: list[LiquidityLevelOut]
+
+
+class ConfluenceFactorOut(BaseModel):
+    name: str
+    weight: int
+    met: bool
+
+
+class ConfluenceOut(BaseModel):
+    symbol: str
+    timeframe: str
+    htf_timeframe: str
+    bias: str
+    htf_bias: str
+    score: int
+    max_score: int
+    score_pct: float
+    factors: list[ConfluenceFactorOut]

@@ -72,7 +72,16 @@ class MockMarketDataProvider(MarketDataProvider):
         return df
 
     def get_candles(self, symbol: str, timeframe: str, count: int = 500) -> pd.DataFrame:
-        return self._generate(symbol, timeframe, count, end=datetime.now(timezone.utc))
+        # Floor "now" to the timeframe's own boundary rather than using the
+        # exact (microsecond-precision) current time. A real feed's candles
+        # are quantized to fixed boundaries and don't shift between two
+        # calls a second apart - without this, every call would generate a
+        # slightly different timestamp grid, which defeats natural-key
+        # deduplication in app/persistence.py.
+        if timeframe not in _TIMEFRAME_MINUTES:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        end = pd.Timestamp(datetime.now(timezone.utc)).floor(f"{_TIMEFRAME_MINUTES[timeframe]}min")
+        return self._generate(symbol, timeframe, count, end=end)
 
     def get_historical_data(self, symbol: str, timeframe: str, start: datetime, end: datetime) -> pd.DataFrame:
         minutes = _TIMEFRAME_MINUTES[timeframe]

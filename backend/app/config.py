@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     news_blackout_minutes_before: int = 30
     news_blackout_minutes_after: int = 30
 
-    # --- Confluence scoring weights (reserved for a later milestone) -----
+    # --- Confluence scoring weights ---------------------------------------
     confluence_weight_htf_bias: int = 2
     confluence_weight_liquidity_sweep: int = 2
     confluence_weight_choch: int = 2
@@ -101,6 +101,18 @@ class Settings(BaseSettings):
     confluence_weight_order_block: int = 1
     confluence_weight_premium_discount: int = 1
     confluence_weight_session: int = 1
+
+    # --- Market data provider ---------------------------------------------
+    # "mock" (default, zero setup) or "deriv" (live data via Deriv's public
+    # WebSocket API — covers both Forex majors and the synthetic indices,
+    # see app/market_data/deriv_provider.py). Chosen over MetaTrader5
+    # because MT5's official Python package is Windows-only.
+    market_data_provider: str = "mock"
+    # Deriv's market-data endpoints (active_symbols, ticks_history) need no
+    # API token, only an app_id. 1089 is Deriv's well-known public demo
+    # app_id; register your own at api.deriv.com for production use.
+    deriv_app_id: str = "1089"
+    deriv_request_timeout: float = 10.0
 
 
 settings = Settings()

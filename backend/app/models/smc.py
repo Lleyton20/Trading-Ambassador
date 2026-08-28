@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -12,6 +12,9 @@ class SwingPoint(Base):
     """A confirmed swing high or swing low (spec section 7)."""
 
     __tablename__ = "swing_points"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "timestamp", "kind", name="uq_swing_point_identity"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(ForeignKey("instruments.symbol"), index=True)
@@ -26,6 +29,9 @@ class MarketStructureEvent(Base):
     """A Break of Structure or Change of Character event (spec sections 9-10)."""
 
     __tablename__ = "market_structure_events"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "timestamp", "event_type", name="uq_structure_event_identity"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(ForeignKey("instruments.symbol"), index=True)
@@ -41,6 +47,9 @@ class OrderBlock(Base):
     """An evidence-linked order block zone (spec section 13)."""
 
     __tablename__ = "order_blocks"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "created_at", "direction", name="uq_order_block_identity"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(ForeignKey("instruments.symbol"), index=True)
@@ -59,6 +68,9 @@ class FairValueGap(Base):
     """A three-candle Fair Value Gap (spec section 14)."""
 
     __tablename__ = "fair_value_gaps"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "created_at", "direction", name="uq_fair_value_gap_identity"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(ForeignKey("instruments.symbol"), index=True)

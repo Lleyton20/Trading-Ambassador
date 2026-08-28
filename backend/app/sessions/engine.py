@@ -130,6 +130,19 @@ def classify_price_vs_range(
     return "between"
 
 
+def is_within_session_hours(
+    timestamp: pd.Timestamp, *, session_timezone: str, start_hour: int, end_hour: int
+) -> bool:
+    """
+    Whether `timestamp` falls within this session's local start/end hour
+    window (same rule `compute_session_ranges` groups candles by, factored
+    out so a single timestamp - e.g. "is the latest candle in London
+    hours?" - can be checked without generating a full session range).
+    """
+    local_hour = timestamp.tz_convert(ZoneInfo(session_timezone)).hour
+    return start_hour <= local_hour < end_hour
+
+
 def compute_session_ranges(
     df: pd.DataFrame,
     *,

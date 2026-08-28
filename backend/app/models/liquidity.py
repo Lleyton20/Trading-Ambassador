@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -16,6 +16,9 @@ class LiquidityLevel(Base):
     """
 
     __tablename__ = "liquidity_levels"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timeframe", "label", "formed_at", name="uq_liquidity_level_identity"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(ForeignKey("instruments.symbol"), index=True)
@@ -30,6 +33,9 @@ class LiquiditySweep(Base):
     """A confirmed sweep-and-reverse of a liquidity level (spec section 11)."""
 
     __tablename__ = "liquidity_sweeps"
+    __table_args__ = (
+        UniqueConstraint("liquidity_level_id", "swept_at", name="uq_liquidity_sweep_identity"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     liquidity_level_id: Mapped[int] = mapped_column(ForeignKey("liquidity_levels.id"), index=True)

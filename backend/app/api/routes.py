@@ -12,9 +12,13 @@ person decide.
 from __future__ import annotations
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.orm import Session
 
+from app import persistence
+from app.confluence.engine import HTF_MAP, calculate_confluence_score
 from app.config import settings
+from app.database import get_db
 from app.instruments import INSTRUMENT_PROFILES, get_instrument_profile
 from app.market_data.base import MarketDataProvider
 from app.market_data.validation import validate_candles
@@ -22,6 +26,8 @@ from app.risk.position_size import calculate_position_size
 from app.risk.risk_reward import calculate_risk_reward
 from app.schemas.analysis import (
     CandleOut,
+    ConfluenceFactorOut,
+    ConfluenceOut,
     DailyLevelsOut,
     FairValueGapOut,
     LiquidityAnalysisOut,
@@ -39,7 +45,12 @@ from app.schemas.analysis import (
     StructureEventOut,
     SwingPointOut,
 )
-from app.sessions.engine import classify_price_vs_range, compute_daily_levels, compute_session_ranges
+from app.sessions.engine import (
+    classify_price_vs_range,
+    compute_daily_levels,
+    compute_session_ranges,
+    is_within_session_hours,
+)
 from app.smc.fvg import apply_mitigation as apply_fvg_mitigation
 from app.smc.fvg import detect_fair_value_gaps
 from app.smc.liquidity import LiquidityLevel, detect_sweep, find_equal_levels
@@ -169,7 +180,7 @@ def get_sessions(symbol: str, request: Request, timeframe: str = Query("M15")):
 
 
 @router.get("/markets/{symbol}/smc", response_model=SmcAnalysisOut)
-def get_smc_analysis(symbol: str, request: Request, timeframe: str = Query("H1")):
+def get_smc_analysis(symbol: str, request: Request, timeframe: str = Query("H1"), db: Session = Depends(get_db)):
     """
     The full "SMC ANALYSIS" panel: structure/bias, order blocks, fair
     value gaps, and premium/discount — all derived from the same
@@ -189,6 +200,15 @@ def get_smc_analysis(symbol: str, request: Request, timeframe: str = Query("H1")
 
     gaps = detect_fair_value_gaps(df)
     apply_fvg_mitigation(df, gaps)
+
+    # Side effect: record this analysis to its DB tables (audit trail for
+    # a future backtester/journal) — the response above is still always
+    # computed fresh from live candles, never read back from these rows.
+    persistence.seed_instruments(db)
+    persistence.persist_swing_points(db, symbol, timeframe, swings)
+    persistence.persist_structure_events(db, symbol, timeframe, events)
+    persistence.persist_order_blocks(db, symbol, timeframe, order_blocks)
+    persistence.persist_fair_value_gaps(db, symbol, timeframe, gaps)
 
     premium_discount_out: PremiumDiscountOut | None = None
     dealing_range = determine_active_dealing_range(swings)
@@ -232,7 +252,7 @@ def get_smc_analysis(symbol: str, request: Request, timeframe: str = Query("H1")
 
 
 @router.get("/markets/{symbol}/liquidity", response_model=LiquidityAnalysisOut)
-def get_liquidity_analysis(symbol: str, request: Request, timeframe: str = Query("H1")):
+def get_liquidity_analysis(symbol: str, request: Request, timeframe: str = Query("H1"), db: Session = Depends(get_db)):
     """
     Liquidity levels (swing-based equal highs/lows plus previous-day
     high/low) with each level's sweep status (spec sections 5, 6, 11, 12).
@@ -263,14 +283,20 @@ def get_liquidity_analysis(symbol: str, request: Request, timeframe: str = Query
             levels.append(LiquidityLevel(label="previous_day_low", kind="low", price=float(last.previous_day_low), formed_at=known_since))
 
     levels_out: list[LiquidityLevelOut] = []
+    sweep_pairs: list[tuple] = []
     for level in levels:
         sweep = detect_sweep(df, level)
+        sweep_pairs.append((level, sweep))
         levels_out.append(
             LiquidityLevelOut(
                 label=level.label, kind=level.kind, price=level.price, formed_at=level.formed_at,
                 swept=sweep is not None, swept_at=sweep.swept_at if sweep else None,
             )
         )
+
+    persistence.seed_instruments(db)
+    level_ids = persistence.persist_liquidity_levels(db, symbol, timeframe, levels)
+    persistence.persist_liquidity_sweeps(db, level_ids, sweep_pairs)
 
     return LiquidityAnalysisOut(symbol=symbol, timeframe=timeframe, levels=levels_out)
 
@@ -362,3 +388,85 @@ def post_position_size(payload: PositionSizeRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PositionSizeOut(**result.__dict__)
+
+
+@router.get("/markets/{symbol}/confluence", response_model=ConfluenceOut)
+def get_confluence(symbol: str, request: Request, timeframe: str = Query("H1")):
+    """
+    Combines the same evidence the /smc and /liquidity endpoints already
+    expose into one weighted confluence score (spec Milestone 3) —
+    evidence, not a BUY/SELL signal (see app/confluence/engine.py).
+    """
+    _require_known_symbol(symbol)
+    provider = _get_provider(request)
+
+    df = _fetch_valid_candles(provider, symbol, timeframe, 500)
+    swings = label_swing_sequence(df, lookback=settings.swing_lookback)
+    events, bias = detect_structure_events(df, swing_lookback=settings.swing_lookback)
+
+    htf_timeframe = HTF_MAP.get(timeframe, timeframe)
+    htf_df = _fetch_valid_candles(provider, symbol, htf_timeframe, 500)
+    _, htf_bias = detect_structure_events(htf_df, swing_lookback=settings.swing_lookback)
+
+    order_blocks = detect_order_blocks(df, events, min_displacement_atr_multiple=settings.min_displacement_atr_mult)
+    apply_ob_mitigation(df, order_blocks)
+    gaps = detect_fair_value_gaps(df)
+    apply_fvg_mitigation(df, gaps)
+
+    price_favors_bias = False
+    dealing_range = determine_active_dealing_range(swings)
+    if dealing_range is not None:
+        current_price = float(df["close"].iloc[-1])
+        status = classify_premium_discount(current_price, dealing_range)
+        # SMC convention: look to buy in a discount, sell in a premium.
+        price_favors_bias = (bias == "bullish" and status == "discount") or (bias == "bearish" and status == "premium")
+
+    has_recent_choch = any(e.event_type == "CHOCH" for e in events[-20:])
+    has_unmitigated_fvg = any(g.direction == bias and g.mitigated_pct < 100.0 for g in gaps)
+    has_unmitigated_ob = any(ob.direction == bias and not ob.mitigated for ob in order_blocks)
+
+    levels: list[LiquidityLevel] = find_equal_levels(
+        swings, tolerance_pct=settings.liquidity_tolerance_pct, kind="high"
+    ) + find_equal_levels(swings, tolerance_pct=settings.liquidity_tolerance_pct, kind="low")
+    has_recent_sweep = any(detect_sweep(df, level) is not None for level in levels)
+
+    latest_ts = df.index[-1]
+    session_active = any(
+        is_within_session_hours(
+            latest_ts,
+            session_timezone=getattr(settings, tz_key),
+            start_hour=getattr(settings, start_key),
+            end_hour=getattr(settings, end_key),
+        )
+        for tz_key, start_key, end_key in _SESSION_CONFIGS.values()
+    )
+
+    result = calculate_confluence_score(
+        bias=bias,
+        htf_bias=htf_bias,
+        has_recent_liquidity_sweep=has_recent_sweep,
+        has_recent_choch=has_recent_choch,
+        has_unmitigated_fvg_with_bias=has_unmitigated_fvg,
+        has_unmitigated_order_block_with_bias=has_unmitigated_ob,
+        price_favors_bias=price_favors_bias,
+        session_active=session_active,
+        weight_htf_bias=settings.confluence_weight_htf_bias,
+        weight_liquidity_sweep=settings.confluence_weight_liquidity_sweep,
+        weight_choch=settings.confluence_weight_choch,
+        weight_fvg=settings.confluence_weight_fvg,
+        weight_order_block=settings.confluence_weight_order_block,
+        weight_premium_discount=settings.confluence_weight_premium_discount,
+        weight_session=settings.confluence_weight_session,
+    )
+
+    return ConfluenceOut(
+        symbol=symbol,
+        timeframe=timeframe,
+        htf_timeframe=htf_timeframe,
+        bias=bias,
+        htf_bias=htf_bias,
+        score=result.score,
+        max_score=result.max_score,
+        score_pct=result.score_pct,
+        factors=[ConfluenceFactorOut(name=f.name, weight=f.weight, met=f.met) for f in result.factors],
+    )
