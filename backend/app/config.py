@@ -88,10 +88,26 @@ class Settings(BaseSettings):
     min_acceptable_rr: float = 2.0       # setups below this RR are flagged LOW quality
     default_risk_per_trade_pct: float = 1.0  # used by the position size calculator
 
-    # --- News engine (reserved for a later milestone; centralized now so
-    # nothing gets hard-coded ad hoc when that module is built) -----------
+    # --- News / economic calendar (Finnhub) --------------------------------
     news_blackout_minutes_before: int = 30
     news_blackout_minutes_after: int = 30
+    # Finnhub's economic calendar needs a free API key from finnhub.io -
+    # left blank by default, see app/news/finnhub_client.py for what
+    # happens when it's unset (degrades gracefully, doesn't crash).
+    finnhub_api_key: str = ""
+    news_lookahead_days: int = 7  # how far ahead "upcoming high-impact" looks
+
+    # --- Price-in-zone alerts + Telegram delivery --------------------------
+    # Off by default - opt-in, so a fresh checkout (or CI) never spins up
+    # a background loop hitting the live market-data provider unasked.
+    alerts_enabled: bool = False
+    alerts_timeframe: str = "H1"
+    alerts_poll_interval_seconds: int = 60
+    # From @BotFather (bot token) and the chat to post into (chat ID).
+    # Left blank, the notifier no-ops instead of erroring - see
+    # app/alerts/telegram_notifier.py.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     # --- Confluence scoring weights ---------------------------------------
     confluence_weight_htf_bias: int = 2

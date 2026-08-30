@@ -19,6 +19,19 @@ only. An order block's or FVG's mitigation status, by contrast, evolves as
 new candles arrive, so those rows are updated in place when the natural
 key already exists.
 
+WHY EVERY INSERT COMMITS INDIVIDUALLY
+-----------------------------------------
+The dashboard fires several endpoints in parallel on every page load
+(/smc, /liquidity, /confluence each independently call
+`seed_instruments`, for instance), so two requests can both see a natural
+key as "not there yet" and both try to insert it — a harmless race, not a
+real conflict. Committing once per row (instead of batching a whole
+loop's worth of new rows into one commit at the end) means a duplicate
+from that race only affects the one colliding row: it's caught, rolled
+back, and skipped, while every other row in the same loop still gets
+saved. Batching them together would let one duplicate roll back an
+entire batch of otherwise-legitimate new rows.
+
 This module is called as a side effect from the API routes (see
 app/api/routes.py) — every response is still computed fresh from live
 candles on every request; persistence here is an audit trail, not a
@@ -27,6 +40,7 @@ cache the routes read back from.
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.instruments import INSTRUMENT_PROFILES
@@ -43,6 +57,16 @@ from app.smc.order_blocks import OrderBlock
 from app.smc.structure import StructureEvent
 
 
+def _add_and_commit_or_ignore_duplicate(db: Session, row) -> None:
+    """Adds and commits one row, tolerating a concurrent request having
+    inserted the same natural-key row first - see module docstring."""
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+
+
 def seed_instruments(db: Session) -> None:
     """Upserts every known InstrumentProfile into the `instruments` table.
 
@@ -53,8 +77,9 @@ def seed_instruments(db: Session) -> None:
     for symbol, profile in INSTRUMENT_PROFILES.items():
         if symbol in existing:
             continue
-        db.add(Instrument(symbol=symbol, display_name=profile.display_name, asset_class=profile.asset_class.value))
-    db.commit()
+        _add_and_commit_or_ignore_duplicate(
+            db, Instrument(symbol=symbol, display_name=profile.display_name, asset_class=profile.asset_class.value)
+        )
 
 
 def persist_swing_points(db: Session, symbol: str, timeframe: str, swings: list[dict]) -> None:
@@ -69,13 +94,13 @@ def persist_swing_points(db: Session, symbol: str, timeframe: str, swings: list[
         )
         if exists is not None:
             continue
-        db.add(
+        _add_and_commit_or_ignore_duplicate(
+            db,
             SwingPointRow(
                 symbol=symbol, timeframe=timeframe, timestamp=s["timestamp"],
                 price=s["price"], kind=s["kind"], label=s["label"],
-            )
+            ),
         )
-    db.commit()
 
 
 def persist_structure_events(db: Session, symbol: str, timeframe: str, events: list[StructureEvent]) -> None:
@@ -90,14 +115,14 @@ def persist_structure_events(db: Session, symbol: str, timeframe: str, events: l
         )
         if exists is not None:
             continue
-        db.add(
+        _add_and_commit_or_ignore_duplicate(
+            db,
             MarketStructureEventRow(
                 symbol=symbol, timeframe=timeframe, timestamp=e.timestamp,
                 event_type=e.event_type, direction=e.direction,
                 price=e.price, broken_level=e.broken_level,
-            )
+            ),
         )
-    db.commit()
 
 
 def persist_order_blocks(db: Session, symbol: str, timeframe: str, order_blocks: list[OrderBlock]) -> None:
@@ -111,19 +136,20 @@ def persist_order_blocks(db: Session, symbol: str, timeframe: str, order_blocks:
             )
         )
         if row is None:
-            db.add(
+            _add_and_commit_or_ignore_duplicate(
+                db,
                 OrderBlockRow(
                     symbol=symbol, timeframe=timeframe, created_at=ob.created_at,
                     direction=ob.direction, zone_low=ob.zone_low, zone_high=ob.zone_high,
                     structure_event_type=ob.structure_event_type,
                     mitigated=ob.mitigated, mitigated_at=ob.mitigated_at, retest_count=ob.retest_count,
-                )
+                ),
             )
         else:
             row.mitigated = ob.mitigated
             row.mitigated_at = ob.mitigated_at
             row.retest_count = ob.retest_count
-    db.commit()
+            db.commit()
 
 
 def persist_fair_value_gaps(db: Session, symbol: str, timeframe: str, gaps: list[FairValueGap]) -> None:
@@ -137,16 +163,17 @@ def persist_fair_value_gaps(db: Session, symbol: str, timeframe: str, gaps: list
             )
         )
         if row is None:
-            db.add(
+            _add_and_commit_or_ignore_duplicate(
+                db,
                 FairValueGapRow(
                     symbol=symbol, timeframe=timeframe, created_at=g.created_at,
                     direction=g.direction, upper=g.upper, lower=g.lower,
                     mitigated_pct=g.mitigated_pct,
-                )
+                ),
             )
         else:
             row.mitigated_pct = g.mitigated_pct
-    db.commit()
+            db.commit()
 
 
 def persist_liquidity_levels(
@@ -157,9 +184,9 @@ def persist_liquidity_levels(
     mapping, so `persist_liquidity_sweeps` can attach sweeps to the right
     persisted row via its foreign key.
     """
-    level_ids: dict[tuple[str, str, object], int] = {}
-    for lvl in levels:
-        row = db.scalar(
+
+    def _find(lvl: LiquidityLevel) -> LiquidityLevelRow | None:
+        return db.scalar(
             select(LiquidityLevelRow).where(
                 LiquidityLevelRow.symbol == symbol,
                 LiquidityLevelRow.timeframe == timeframe,
@@ -167,15 +194,24 @@ def persist_liquidity_levels(
                 LiquidityLevelRow.formed_at == lvl.formed_at,
             )
         )
+
+    level_ids: dict[tuple[str, str, object], int] = {}
+    for lvl in levels:
+        row = _find(lvl)
         if row is None:
             row = LiquidityLevelRow(
                 symbol=symbol, timeframe=timeframe, label=lvl.label,
                 kind=lvl.kind, price=lvl.price, formed_at=lvl.formed_at,
             )
             db.add(row)
-            db.flush()  # need row.id before commit, without a second round trip
+            try:
+                db.commit()
+            except IntegrityError:
+                # A concurrent request inserted this exact level first -
+                # re-query for its row instead of losing track of it.
+                db.rollback()
+                row = _find(lvl)
         level_ids[(lvl.label, lvl.kind, lvl.formed_at)] = row.id
-    db.commit()
     return level_ids
 
 
@@ -198,9 +234,6 @@ def persist_liquidity_sweeps(
         )
         if exists is not None:
             continue
-        db.add(
-            LiquiditySweepRow(
-                liquidity_level_id=level_id, swept_at=sweep.swept_at, sweep_extreme=sweep.sweep_extreme,
-            )
+        _add_and_commit_or_ignore_duplicate(
+            db, LiquiditySweepRow(liquidity_level_id=level_id, swept_at=sweep.swept_at, sweep_extreme=sweep.sweep_extreme)
         )
-    db.commit()

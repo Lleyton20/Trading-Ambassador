@@ -12,10 +12,11 @@ structure?", "where is liquidity?", "is this setup's risk:reward
 acceptable?") with data and reasoning, and leaves the trading decision to
 the person using it.
 
-![Structure, order blocks, FVGs, and liquidity levels plotted over live EURUSD H1 data](docs/analysis-demo.png)
+![Trading Ambassador dashboard: candlestick chart with SMC overlays, confluence score, and alerts panel](docs/dashboard-demo.png)
 
-*Live EURUSD H1 data from `app/market_data/deriv_provider.py`, annotated by
-`backend/scripts/plot_analysis.py` — see "Visualizing analysis" below.*
+*The React dashboard (`frontend/`) — bias-colored zones (bearish = red,
+bullish = light blue), a live confluence score, an economic-calendar
+panel, and price-in-zone alerts, all built on the API below.*
 
 ## Disclaimer
 
@@ -39,7 +40,7 @@ trading-ambassador/
 │   │   ├── models/              # DB tables: instruments, candles, swing_points,
 │   │   │                        #   market_structure_events, order_blocks,
 │   │   │                        #   fair_value_gaps, liquidity_levels/sweeps,
-│   │   │                        #   sessions, daily_levels
+│   │   │                        #   sessions, daily_levels, alerts
 │   │   ├── schemas/              # Pydantic request/response shapes for the API
 │   │   ├── market_data/          # MarketDataProvider interface, a deterministic dev
 │   │   │                        #   fixture, a live Deriv API provider, OHLC checks
@@ -47,20 +48,28 @@ trading-ambassador/
 │   │   ├── smc/                  # swings, HH/HL/LH/LL, BOS/CHoCH, order blocks,
 │   │   │                        #   fair value gaps, liquidity sweeps, premium/discount
 │   │   ├── confluence/            # weighted confluence scoring across the above
+│   │   ├── news/                  # Finnhub economic calendar client + engine
+│   │   ├── alerts/                # price-in-zone watcher + Telegram notifier
 │   │   ├── risk/                 # risk:reward calculator, position size calculator
 │   │   └── api/                  # FastAPI routes tying the above together
+│   ├── scripts/plot_analysis.py  # annotated-chart dev tool (see "Visualizing analysis")
 │   ├── tests/                    # pytest, deterministic hand-verified fixtures
 │   ├── requirements.txt
 │   └── .env.example
+├── frontend/                      # React + TypeScript + Vite dashboard
+│   └── src/
+│       ├── components/            # chart, bias badge, confluence/news/alerts panels
+│       ├── api.ts                # typed fetch client for the backend
+│       └── colors.ts             # bias color convention (bearish=red, bullish=light blue)
 └── README.md
 ```
 
-Frontend, news intelligence, and backtesting are **not built yet** — see
-"Roadmap" below. This is intentional: the spec this project follows is
-explicit that building everything at once produces an unreviewable mess.
-Each phase ships as a working, tested slice.
+Backtesting and the trade journal are **not built yet** — see "Roadmap"
+below. This is intentional: the spec this project follows is explicit
+that building everything at once produces an unreviewable mess. Each
+phase ships as a working, tested slice.
 
-## What's working right now (Milestones 1-3)
+## What's working right now (Milestones 1-4 + dashboard)
 
 - **Market data layer**: a `MarketDataProvider` interface (spec-style
   vendor abstraction) with a deterministic synthetic-data provider for
@@ -115,9 +124,25 @@ Each phase ships as a working, tested slice.
   (`app/confluence/engine.py`) — still evidence, not a signal.
 - **Schema migrations**: Alembic (`backend/alembic/`), reading
   `DATABASE_URL` from the same `Settings` object as the rest of the app.
+- **Economic news calendar**: today's releases sorted high→low impact plus
+  upcoming high-impact releases, via Finnhub (`app/news/`), mapped to the
+  instruments they actually affect (USD news affects every USD pair +
+  gold; Deriv's synthetic indices are deliberately never mapped to any
+  news event — they're synthetic, not news-driven). Degrades to
+  `available: false` rather than erroring if Finnhub isn't configured.
+- **Price-in-zone alerts**: a background watcher (`app/alerts/`) checks
+  every instrument's current price against unmitigated order
+  blocks/FVGs and fires an alert — persisted to the DB and sent to
+  Telegram — the first time price enters a zone it wasn't already
+  sitting in. Off by default (`ALERTS_ENABLED=true` to turn on).
+- **Dashboard** (`frontend/`): a React/TypeScript single-page app —
+  candlestick chart with live SMC overlays, confluence score, the news
+  calendar, and an alerts panel with a toast on new alerts. Polling-based
+  (15–30s), not WebSocket-streamed — matches the SMC engine's own
+  timeframe granularity, where nothing changes tick-by-tick.
 - **REST API** (FastAPI) wiring all of the above into real endpoints —
   see below.
-- **47 passing tests** against hand-verified, deterministic fixtures
+- **59 passing tests** against hand-verified, deterministic fixtures
   (not just "it ran without crashing").
 
 ## Key design decisions
@@ -141,15 +166,26 @@ Each phase ships as a working, tested slice.
   threshold.
 - **Position sizing uses each instrument's real `contract_size`/`pip_size`**
   via an explicit `InstrumentProfile` registry — never a guessed constant.
+- **Every DB write in `app/persistence.py` commits per-row, not per-batch.**
+  The dashboard fires several endpoints in parallel on every page load, so
+  two requests can both see a natural key as "not there yet" and both try
+  to insert it — a harmless race. Committing one row at a time means a
+  duplicate from that race only affects the one colliding row (caught,
+  rolled back, skipped) instead of rolling back an entire batch of
+  otherwise-legitimate new rows.
 
 ## Tech stack
 
 - **Backend**: Python, FastAPI, Pydantic v2, SQLAlchemy 2.0, pandas, NumPy
+- **Frontend**: React, TypeScript, Vite, Tailwind CSS,
+  [lightweight-charts](https://github.com/tradingview/lightweight-charts)
 - **Database**: SQLite for local development (zero setup); PostgreSQL-ready
   by changing one environment variable (`DATABASE_URL`)
+- **External APIs**: Deriv (market data), Finnhub (economic calendar),
+  Telegram Bot API (alerts) — all optional, the app runs with zero of them
+  configured (mock data, no news, no alerts)
 - **Testing**: pytest, deterministic fixtures (no reliance on live market
   data or manual eyeballing of charts)
-- **Frontend**: not yet built (Roadmap Phase 6 — React/TypeScript planned)
 
 ## Installation
 
@@ -159,6 +195,9 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # optional — every setting has a safe default
 alembic upgrade head    # creates the local SQLite schema
+
+cd ../frontend
+npm install
 ```
 
 ## Running the backend
@@ -182,6 +221,51 @@ To use live Deriv data instead of the mock fixture, set
 `MARKET_DATA_PROVIDER=deriv` in `.env` (or the environment) before
 starting the server — no API token needed, see "Data sources" below.
 
+## Running the dashboard
+
+With the backend running (above), in a second terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open `http://localhost:5173` — the Vite dev server proxies `/api/*` to
+`http://127.0.0.1:8000` (see `frontend/vite.config.ts`), so no CORS setup
+is needed in dev. Works immediately against the mock provider; the news
+panel shows "unavailable" and the alerts panel shows "no alerts yet"
+until you configure Finnhub / turn on alerts (see below).
+
+### Economic calendar
+
+Free API key from [finnhub.io](https://finnhub.io), then in `backend/.env`:
+
+```
+FINNHUB_API_KEY=your-key-here
+```
+
+Note: Finnhub's economic calendar endpoint has historically been gated
+behind a paid plan for some accounts. If your key doesn't have access,
+the panel just shows "unavailable" rather than erroring — the rest of
+the dashboard is unaffected.
+
+### Price-in-zone alerts + Telegram
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram, `/newbot`, follow the prompts — you get a bot token.
+2. Message your new bot once (anything), then visit
+   `https://api.telegram.org/bot<your-token>/getUpdates` to find your chat ID.
+3. In `backend/.env`:
+
+```
+ALERTS_ENABLED=true
+TELEGRAM_BOT_TOKEN=your-bot-token
+TELEGRAM_CHAT_ID=your-chat-id
+```
+
+Restart the backend — every 60 seconds (`ALERTS_POLL_INTERVAL_SECONDS`)
+it checks every instrument's price against unmitigated order
+blocks/FVGs and messages you the first time price enters one.
+
 ## Testing
 
 ```bash
@@ -194,8 +278,8 @@ python -m pytest -v
 Reading raw JSON to sanity-check whether a swing/BOS/order block/FVG
 actually lines up with the chart is slow. `scripts/plot_analysis.py` runs
 the exact same pipeline `app/api/routes.py` does and renders one annotated
-candlestick chart instead — the image at the top of this README was
-generated by it:
+candlestick chart as a static PNG — useful for a quick sanity check
+without starting the dashboard at all:
 
 ```bash
 cd backend
@@ -207,7 +291,7 @@ Saves a PNG under `scripts/output/` by default; pass `--show` to also open
 an interactive window. Works with the mock fixture too (`--provider mock`,
 the default) if you'd rather not hit live Deriv data.
 
-## API endpoints (Milestones 1-3)
+## API endpoints
 
 | Endpoint | Purpose |
 |---|---|
@@ -219,6 +303,8 @@ the default) if you'd rather not hit live Deriv data.
 | `GET /api/markets/{symbol}/liquidity` | Equal highs/lows + PDH/PDL, each with sweep status |
 | `GET /api/markets/{symbol}/confluence` | Weighted confluence score + per-factor breakdown |
 | `GET /api/markets/{symbol}/analysis` | Combined dashboard "overview" payload |
+| `GET /api/news/calendar` | Today's + upcoming high-impact economic releases |
+| `GET /api/alerts/recent` | Recent price-in-zone alerts |
 | `POST /api/risk/risk-reward` | RR calculation + quality classification |
 | `POST /api/risk/position-size` | Position size from account/risk/instrument |
 
@@ -235,11 +321,9 @@ Deriv's own demo id). Enable it with `MARKET_DATA_PROVIDER=deriv`.
 
 ## Roadmap
 
-- **Milestone 4**: News intelligence engine + economic calendar.
 - **Milestone 5**: Backtesting engine (explicitly designed to reuse the
   same non-lookahead-safe functions already in `sessions/engine.py` and
   `smc/structure.py`).
-- **Milestone 6**: React/TypeScript dashboard frontend.
 - **Milestone 7**: Trade journal + performance analytics.
 
 ## Known gaps (intentional, tracked)
@@ -249,10 +333,15 @@ Deriv's own demo id). Enable it with `MARKET_DATA_PROVIDER=deriv`.
   historical rows back is a natural fit for the backtester (Milestone 5).
 - Raw candles aren't persisted yet, only the SMC results derived from
   them (`app/models/candle.py`'s table exists but nothing writes to it) —
-  intentionally out of Milestone 3's scope; revisit alongside Milestone 5.
+  intentionally out of scope so far; revisit alongside Milestone 5.
 - Session range detection assumes a session's local hours don't cross
   midnight (true for the three default sessions; documented in
   `sessions/engine.py`).
+- The alert watcher's "already alerted" state is in-memory and per
+  process — a restart forgets which zones were already active, so a zone
+  price happens to still be sitting in when the app restarts will alert
+  again once. Acceptable for a single-instance local deployment; would
+  need moving that state into the DB for a multi-instance deployment.
 - No authentication/users yet — single-user local development only.
 
 ## License
