@@ -1,0 +1,4 @@
+# Extra dependencies for local dev tooling (not needed to run the API
+# itself - see requirements.txt for that).
+-r requirements.txt
+matplotlib>=3.8.0

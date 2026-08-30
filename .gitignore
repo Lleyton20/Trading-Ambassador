@@ -26,6 +26,9 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Generated chart output (regenerate with backend/scripts/plot_analysis.py)
+backend/scripts/output/
+
 # Scratch (files staged for manual deletion by the user)
 _to_delete/
 *.db-journal
