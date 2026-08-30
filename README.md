@@ -231,3 +231,7 @@ Deriv's own demo id). Enable it with `MARKET_DATA_PROVIDER=deriv`.
   midnight (true for the three default sessions; documented in
   `sessions/engine.py`).
 - No authentication/users yet — single-user local development only.
+
+## License
+
+[MIT](LICENSE)
