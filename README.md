@@ -1,5 +1,7 @@
 # Trading Ambassador
 
+[![Tests](https://github.com/Lleyton20/Trading-Ambassador/actions/workflows/tests.yml/badge.svg)](https://github.com/Lleyton20/Trading-Ambassador/actions/workflows/tests.yml)
+
 A market intelligence and trading **analysis** platform for Forex and Deriv
 synthetic indices (Volatility, Boom, and Crash indices), built around
 Smart Money Concepts (SMC), session analysis, and risk management.
