@@ -46,6 +46,7 @@ input int    InpZoneExtensionBars = 30;                       // Bars an active 
 input int    InpZoneMaxAgeBars    = 60;                       // Zones don't visually extend further back than this
 input int    InpMaxZonesPerType   = 4;                        // Most recent unmitigated order blocks/FVGs to draw
 input bool   InpShowConfluence    = true;                     // Also fetch/show the confluence score
+input bool   InpShowHtfZones      = true;                     // Also draw the higher-timeframe's zones (dashed)
 
 //--- bias colors: kept identical to frontend/src/colors.ts, so the EA's
 // chart markup and the web dashboard agree visually.
@@ -209,7 +210,7 @@ color BiasColor(string bias)
 //| real benefit). Recreate-rather-than-update, same pattern          |
 //| frontend/src/components/PriceChart.tsx uses for its price lines.  |
 //+------------------------------------------------------------------+
-void DrawZone(string name, datetime t1, double p1, datetime t2, double p2, color clr)
+void DrawZone(string name, datetime t1, double p1, datetime t2, double p2, color clr, ENUM_LINE_STYLE style=STYLE_SOLID)
   {
    ObjectDelete(0, name);
    ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2);
@@ -217,7 +218,7 @@ void DrawZone(string name, datetime t1, double p1, datetime t2, double p2, color
    ObjectSetInteger(0, name, OBJPROP_FILL, false);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
    ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
   }
@@ -236,11 +237,18 @@ void DrawLabelAtPrice(string name, datetime t, double p, string text, color clr,
   }
 
 //+------------------------------------------------------------------+
+//| Top-right status/bias/confluence panel. CORNER_RIGHT_UPPER alone  |
+//| isn't enough - a label's text still grows rightward off-screen    |
+//| from its anchor point by default, so ANCHOR_RIGHT_UPPER is set    |
+//| too, which makes the text grow leftward from the right edge and   |
+//| keeps it fully on-chart.                                          |
+//+------------------------------------------------------------------+
 void DrawCornerLabel(string name, int y, string text, color clr)
   {
    ObjectDelete(0, name);
    ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
@@ -252,8 +260,52 @@ void DrawCornerLabel(string name, int y, string text, color clr)
   }
 
 //+------------------------------------------------------------------+
-//| One full refresh: fetch /smc (+ /confluence), clear everything   |
-//| this EA previously drew, redraw from the fresh response.         |
+//| Draws order blocks + FVGs from one /smc response. `namePrefix`   |
+//| keeps LTF and HTF zones as separate named objects (both cleaned  |
+//| up together by the ObjectsDeleteAll(0, OBJ_PREFIX) at the start  |
+//| of every refresh); `style` is how LTF vs HTF zones are told      |
+//| apart on-chart (solid vs dashed) without adding more text.       |
+//+------------------------------------------------------------------+
+void DrawZonesFromSmc(CJAVal &smcData, string namePrefix, datetime oldestZoneEdge, datetime rightEdge, ENUM_LINE_STYLE style)
+  {
+   int obCount = smcData["order_blocks"].Size();
+   int obDrawn = 0;
+   for(int i = obCount - 1; i >= 0 && obDrawn < InpMaxZonesPerType; i--)
+     {
+      if(smcData["order_blocks"][i]["mitigated"].ToBool())
+         continue;
+      string   dir      = smcData["order_blocks"][i]["direction"].ToStr();
+      datetime created   = ParseIsoUtcToServerTime(smcData["order_blocks"][i]["created_at"].ToStr());
+      datetime leftEdge  = (created > oldestZoneEdge) ? created : oldestZoneEdge;
+      double   lo        = smcData["order_blocks"][i]["zone_low"].ToDbl();
+      double   hi        = smcData["order_blocks"][i]["zone_high"].ToDbl();
+      DrawZone(OBJ_PREFIX + namePrefix + "ob_" + IntegerToString(i), leftEdge, lo, rightEdge, hi, BiasColor(dir), style);
+      obDrawn++;
+     }
+
+   int fvgCount = smcData["fair_value_gaps"].Size();
+   int fvgDrawn = 0;
+   for(int i = fvgCount - 1; i >= 0 && fvgDrawn < InpMaxZonesPerType; i--)
+     {
+      if(smcData["fair_value_gaps"][i]["mitigated_pct"].ToDbl() >= 100.0)
+         continue;
+      string   dir      = smcData["fair_value_gaps"][i]["direction"].ToStr();
+      datetime created   = ParseIsoUtcToServerTime(smcData["fair_value_gaps"][i]["created_at"].ToStr());
+      datetime leftEdge  = (created > oldestZoneEdge) ? created : oldestZoneEdge;
+      double   lo        = smcData["fair_value_gaps"][i]["lower"].ToDbl();
+      double   hi        = smcData["fair_value_gaps"][i]["upper"].ToDbl();
+      DrawZone(OBJ_PREFIX + namePrefix + "fvg_" + IntegerToString(i), leftEdge, lo, rightEdge, hi, BiasColor(dir), style);
+      fvgDrawn++;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| One full refresh: fetch /smc + /confluence for the chart's own   |
+//| timeframe, then (if enabled) /smc again for whichever higher     |
+//| timeframe /confluence itself says is the HTF - same HTF_MAP the  |
+//| backend's confluence engine already uses (app/confluence/engine.py),|
+//| not a second mapping reimplemented here. Clears everything this  |
+//| EA previously drew, then redraws from the fresh responses.       |
 //+------------------------------------------------------------------+
 void RefreshFromBackend()
   {
@@ -278,11 +330,52 @@ void RefreshFromBackend()
       return;
      }
 
-   string bias    = smc["bias"].ToStr();
-   color  biasClr = BiasColor(bias);
+   string bias = smc["bias"].ToStr();
 
+   //--- confluence - fetched here (not a separate later call) because
+   // its htf_timeframe is what tells us which higher timeframe to also
+   // pull zones for below.
+   bool   haveConfluence = false;
+   int    confScore = 0, confMax = 0;
+   double confPct = 0.0;
+   string confBias = "", htfTimeframe = "";
+   if(InpShowConfluence || InpShowHtfZones)
+     {
+      string confUrl = InpApiBaseUrl + "/api/markets/" + UrlEncodeSymbol(symbol) + "/confluence?timeframe=" + tf;
+      string confBody;
+      if(HttpGet(confUrl, confBody))
+        {
+         CJAVal c;
+         if(c.Deserialize(confBody))
+           {
+            haveConfluence = true;
+            confScore    = (int)c["score"].ToInt();
+            confMax      = (int)c["max_score"].ToInt();
+            confPct      = c["score_pct"].ToDbl();
+            confBias     = c["bias"].ToStr();
+            htfTimeframe = c["htf_timeframe"].ToStr();
+           }
+        }
+     }
+
+   //--- top-right panel: status, bias, confluence, price status - all in
+   // one place, clean and out of the way of the price action.
    DrawCornerLabel(OBJ_PREFIX + "status", 10, "Trading Ambassador -- " + symbol + " " + tf, COLOR_NEUTRAL);
-   DrawCornerLabel(OBJ_PREFIX + "bias", 28, "Bias: " + bias, biasClr);
+   DrawCornerLabel(OBJ_PREFIX + "bias", 28, "Bias: " + bias, BiasColor(bias));
+   if(InpShowConfluence && haveConfluence)
+      DrawCornerLabel(OBJ_PREFIX + "confluence", 46,
+                      StringFormat("Confluence: %d/%d (%.0f%%)", confScore, confMax, confPct),
+                      BiasColor(confBias));
+
+   int nextY = 64;
+   if(smc["premium_discount"].type != jtNULL && smc["premium_discount"].type != jtUNDEF)
+     {
+      string pdStatus = smc["premium_discount"]["status"].ToStr();
+      DrawCornerLabel(OBJ_PREFIX + "pd", nextY, "Price: " + pdStatus, COLOR_NEUTRAL);
+      nextY += 18;
+     }
+   if(InpShowHtfZones && haveConfluence && htfTimeframe != "")
+      DrawCornerLabel(OBJ_PREFIX + "htf", nextY, "HTF (" + htfTimeframe + ", dashed): " + confBias, BiasColor(confBias));
 
    datetime rightEdge = iTime(_Symbol, _Period, 0) + InpZoneExtensionBars * PeriodSeconds();
    // A zone's box never visually extends further back than this, even if
@@ -291,39 +384,21 @@ void RefreshFromBackend()
    // stretch across most of the visible chart.
    datetime oldestZoneEdge = iTime(_Symbol, _Period, (int)MathMin(InpZoneMaxAgeBars, iBars(_Symbol, _Period) - 1));
 
-   //--- order blocks: most recent InpMaxZonesPerType UNMITIGATED ones
-   // only (a mitigated zone is history, not worth watching) - iterating
-   // backward from the newest and stopping early is what limits the
-   // count without needing to know in advance how many qualify.
-   int obCount = smc["order_blocks"].Size();
-   int obDrawn = 0;
-   for(int i = obCount - 1; i >= 0 && obDrawn < InpMaxZonesPerType; i--)
-     {
-      if(smc["order_blocks"][i]["mitigated"].ToBool())
-         continue;
-      string   dir     = smc["order_blocks"][i]["direction"].ToStr();
-      datetime created  = ParseIsoUtcToServerTime(smc["order_blocks"][i]["created_at"].ToStr());
-      datetime leftEdge = (created > oldestZoneEdge) ? created : oldestZoneEdge;
-      double   lo       = smc["order_blocks"][i]["zone_low"].ToDbl();
-      double   hi       = smc["order_blocks"][i]["zone_high"].ToDbl();
-      DrawZone(OBJ_PREFIX + "ob_" + IntegerToString(i), leftEdge, lo, rightEdge, hi, BiasColor(dir));
-      obDrawn++;
-     }
+   //--- this chart's own timeframe: solid outlines
+   DrawZonesFromSmc(smc, "", oldestZoneEdge, rightEdge, STYLE_SOLID);
 
-   //--- fair value gaps: most recent InpMaxZonesPerType not-fully-mitigated
-   int fvgCount = smc["fair_value_gaps"].Size();
-   int fvgDrawn = 0;
-   for(int i = fvgCount - 1; i >= 0 && fvgDrawn < InpMaxZonesPerType; i--)
+   //--- higher timeframe's zones, visible on this (lower) timeframe chart:
+   // dashed outlines, same price levels, one extra WebRequest per poll.
+   if(InpShowHtfZones && haveConfluence && htfTimeframe != "" && htfTimeframe != tf)
      {
-      if(smc["fair_value_gaps"][i]["mitigated_pct"].ToDbl() >= 100.0)
-         continue;
-      string   dir     = smc["fair_value_gaps"][i]["direction"].ToStr();
-      datetime created  = ParseIsoUtcToServerTime(smc["fair_value_gaps"][i]["created_at"].ToStr());
-      datetime leftEdge = (created > oldestZoneEdge) ? created : oldestZoneEdge;
-      double   lo       = smc["fair_value_gaps"][i]["lower"].ToDbl();
-      double   hi       = smc["fair_value_gaps"][i]["upper"].ToDbl();
-      DrawZone(OBJ_PREFIX + "fvg_" + IntegerToString(i), leftEdge, lo, rightEdge, hi, BiasColor(dir));
-      fvgDrawn++;
+      string htfUrl = InpApiBaseUrl + "/api/markets/" + UrlEncodeSymbol(symbol) + "/smc?timeframe=" + htfTimeframe;
+      string htfBody;
+      if(HttpGet(htfUrl, htfBody))
+        {
+         CJAVal htfSmc;
+         if(htfSmc.Deserialize(htfBody))
+            DrawZonesFromSmc(htfSmc, "htf_", oldestZoneEdge, rightEdge, STYLE_DASH);
+        }
      }
 
    //--- BOS/CHoCH markers - most recent few only, same decluttering
@@ -339,41 +414,5 @@ void RefreshFromBackend()
       ENUM_ANCHOR_POINT anchor = (dir == "bullish") ? ANCHOR_UPPER : ANCHOR_LOWER;
       DrawLabelAtPrice(OBJ_PREFIX + "ev_" + IntegerToString(i), t, price, label, BiasColor(dir), anchor);
      }
-
-   //--- premium/discount status (a compact label, not a zone - keeps
-   // this EA's drawing surface to what the plan actually scoped)
-   if(smc["premium_discount"].type != jtNULL && smc["premium_discount"].type != jtUNDEF)
-     {
-      string pdStatus = smc["premium_discount"]["status"].ToStr();
-      DrawCornerLabel(OBJ_PREFIX + "pd", 64, "Price: " + pdStatus, COLOR_NEUTRAL);
-     }
-
-   if(InpShowConfluence)
-      RefreshConfluence(symbol, tf);
-  }
-
-//+------------------------------------------------------------------+
-//| Separate call to /confluence - kept optional (InpShowConfluence)  |
-//| since it's a second WebRequest per poll.                          |
-//+------------------------------------------------------------------+
-void RefreshConfluence(string symbol, string tf)
-  {
-   string url = InpApiBaseUrl + "/api/markets/" + UrlEncodeSymbol(symbol) + "/confluence?timeframe=" + tf;
-   string body;
-   if(!HttpGet(url, body))
-      return; // the status label already shows API health; don't double-warn
-
-   CJAVal c;
-   if(!c.Deserialize(body))
-      return;
-
-   int    score    = (int)c["score"].ToInt();
-   int    maxScore = (int)c["max_score"].ToInt();
-   double pct      = c["score_pct"].ToDbl();
-   string bias     = c["bias"].ToStr();
-
-   DrawCornerLabel(OBJ_PREFIX + "confluence", 46,
-                   StringFormat("Confluence: %d/%d (%.0f%%)", score, maxScore, pct),
-                   BiasColor(bias));
   }
 //+------------------------------------------------------------------+
