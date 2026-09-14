@@ -43,6 +43,8 @@ input string InpTimeframeOverride = "";                       // Backend timefra
 input int    InpPollSeconds       = 30;                       // Seconds between refreshes (min 5)
 input int    InpHttpTimeoutMs     = 5000;                     // WebRequest timeout, ms
 input int    InpZoneExtensionBars = 30;                       // Bars an active zone extends past "now"
+input int    InpZoneMaxAgeBars    = 60;                       // Zones don't visually extend further back than this
+input int    InpMaxZonesPerType   = 4;                        // Most recent unmitigated order blocks/FVGs to draw
 input bool   InpShowConfluence    = true;                     // Also fetch/show the confluence score
 
 //--- bias colors: kept identical to frontend/src/colors.ts, so the EA's
@@ -197,19 +199,24 @@ color BiasColor(string bias)
   }
 
 //+------------------------------------------------------------------+
-//| Draws (or redraws) a zone rectangle. Recreate-rather-than-update, |
-//| same pattern frontend/src/components/PriceChart.tsx uses for its |
-//| price lines - simplest correct way to reflect zones that can     |
-//| disappear or shift between polls.                                  |
+//| Draws (or redraws) a zone as an OUTLINED box (not filled) - a     |
+//| filled rectangle per zone, uncapped, is what made this unreadable |
+//| in practice: overlapping solid blocks bury the candles. An        |
+//| outline reads as "these two lines bound a zone" instead of a      |
+//| wall of color, while staying on the same OBJ_RECTANGLE object     |
+//| type already verified against MQL5's docs (a different object    |
+//| type - trend line pairs - would add unverified surface for no     |
+//| real benefit). Recreate-rather-than-update, same pattern          |
+//| frontend/src/components/PriceChart.tsx uses for its price lines.  |
 //+------------------------------------------------------------------+
 void DrawZone(string name, datetime t1, double p1, datetime t2, double p2, color clr)
   {
    ObjectDelete(0, name);
    ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_FILL, true);
-   ObjectSetInteger(0, name, OBJPROP_BACK, true);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_FILL, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
@@ -278,32 +285,45 @@ void RefreshFromBackend()
    DrawCornerLabel(OBJ_PREFIX + "bias", 28, "Bias: " + bias, biasClr);
 
    datetime rightEdge = iTime(_Symbol, _Period, 0) + InpZoneExtensionBars * PeriodSeconds();
+   // A zone's box never visually extends further back than this, even if
+   // it genuinely formed long ago and is still technically unmitigated -
+   // on higher timeframes (D1+) an honestly-old zone would otherwise
+   // stretch across most of the visible chart.
+   datetime oldestZoneEdge = iTime(_Symbol, _Period, (int)MathMin(InpZoneMaxAgeBars, iBars(_Symbol, _Period) - 1));
 
-   //--- order blocks (unmitigated only - matches the dashboard's own
-   // decluttering call: a mitigated zone is history, not worth watching)
+   //--- order blocks: most recent InpMaxZonesPerType UNMITIGATED ones
+   // only (a mitigated zone is history, not worth watching) - iterating
+   // backward from the newest and stopping early is what limits the
+   // count without needing to know in advance how many qualify.
    int obCount = smc["order_blocks"].Size();
-   for(int i = 0; i < obCount; i++)
+   int obDrawn = 0;
+   for(int i = obCount - 1; i >= 0 && obDrawn < InpMaxZonesPerType; i--)
      {
       if(smc["order_blocks"][i]["mitigated"].ToBool())
          continue;
       string   dir     = smc["order_blocks"][i]["direction"].ToStr();
       datetime created  = ParseIsoUtcToServerTime(smc["order_blocks"][i]["created_at"].ToStr());
+      datetime leftEdge = (created > oldestZoneEdge) ? created : oldestZoneEdge;
       double   lo       = smc["order_blocks"][i]["zone_low"].ToDbl();
       double   hi       = smc["order_blocks"][i]["zone_high"].ToDbl();
-      DrawZone(OBJ_PREFIX + "ob_" + IntegerToString(i), created, lo, rightEdge, hi, BiasColor(dir));
+      DrawZone(OBJ_PREFIX + "ob_" + IntegerToString(i), leftEdge, lo, rightEdge, hi, BiasColor(dir));
+      obDrawn++;
      }
 
-   //--- fair value gaps (not fully mitigated)
+   //--- fair value gaps: most recent InpMaxZonesPerType not-fully-mitigated
    int fvgCount = smc["fair_value_gaps"].Size();
-   for(int i = 0; i < fvgCount; i++)
+   int fvgDrawn = 0;
+   for(int i = fvgCount - 1; i >= 0 && fvgDrawn < InpMaxZonesPerType; i--)
      {
       if(smc["fair_value_gaps"][i]["mitigated_pct"].ToDbl() >= 100.0)
          continue;
       string   dir     = smc["fair_value_gaps"][i]["direction"].ToStr();
       datetime created  = ParseIsoUtcToServerTime(smc["fair_value_gaps"][i]["created_at"].ToStr());
+      datetime leftEdge = (created > oldestZoneEdge) ? created : oldestZoneEdge;
       double   lo       = smc["fair_value_gaps"][i]["lower"].ToDbl();
       double   hi       = smc["fair_value_gaps"][i]["upper"].ToDbl();
-      DrawZone(OBJ_PREFIX + "fvg_" + IntegerToString(i), created, lo, rightEdge, hi, BiasColor(dir));
+      DrawZone(OBJ_PREFIX + "fvg_" + IntegerToString(i), leftEdge, lo, rightEdge, hi, BiasColor(dir));
+      fvgDrawn++;
      }
 
    //--- BOS/CHoCH markers - most recent few only, same decluttering
