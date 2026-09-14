@@ -61,6 +61,10 @@ trading-ambassador/
 │       ├── components/            # chart, bias badge, confluence/news/alerts panels
 │       ├── api.ts                # typed fetch client for the backend
 │       └── colors.ts             # bias color convention (bearish=red, bullish=light blue)
+├── mt5/                           # MQL5 Expert Advisor - draws the same
+│   │                              #   zones/bias natively on an MT5 chart
+│   ├── Experts/TradingAmbassadorEA.mq5
+│   └── Include/JAson.mqh          # vendored JSON lib (MQL5 has none built in)
 └── README.md
 ```
 
@@ -266,6 +270,38 @@ Restart the backend — every 60 seconds (`ALERTS_POLL_INTERVAL_SECONDS`)
 it checks every instrument's price against unmitigated order
 blocks/FVGs and messages you the first time price enters one.
 
+## MT5 Expert Advisor
+
+MT5 has no way to embed a real web page inside the terminal, so the web
+dashboard can't run *inside* MT5 — instead, `mt5/Experts/TradingAmbassadorEA.mq5`
+polls the backend and draws the same zones/bias/confluence natively on an
+MT5 chart, while the dashboard stays open separately for news and alerts.
+**Display only** — it never places, modifies, or closes a trade.
+
+1. Install MT5. On Mac, use the [official installer](https://www.metatrader5.com/en/download)
+   (it's a Wine wrapper, not a VM — it shares your Mac's network stack, so
+   `http://127.0.0.1:8000` reaches a backend running on the same machine
+   with no extra networking setup). For the synthetic indices
+   (V75, Boom/Crash), you need a **Deriv MT5** account specifically — a
+   regular broker's MT5 server doesn't carry those symbols at all.
+2. `backend/.env`: `MARKET_DATA_PROVIDER=deriv`, and keep the backend
+   running continuously (`uvicorn app.main:app`) — the EA has nothing
+   to poll otherwise.
+3. In MT5: **Tools → Options → Expert Advisors** → check "Allow
+   WebRequest for listed URL" → add `http://127.0.0.1:8000`.
+4. Copy `mt5/Include/JAson.mqh` → `<data folder>/MQL5/Include/`, and
+   `mt5/Experts/TradingAmbassadorEA.mq5` → `<data folder>/MQL5/Experts/`
+   (find the data folder via **File → Open Data Folder** in MT5).
+5. **MetaEditor** (F4) → open the EA → compile (F7). See
+   `mt5/README.md` for the one spot most likely to need a fix on first
+   compile (this file couldn't be tested against a real MQL5 compiler).
+6. Drag the compiled EA onto a chart, enable **Auto Trading** (MT5 gates
+   all EA execution behind this, even display-only ones like this one).
+   Set the EA's `InpBackendSymbol` input if the chart's symbol name
+   doesn't exactly match one of our instrument keys (EURUSD, GBPUSD,
+   USDJPY, XAUUSD, CRASH500, CRASH1000, BOOM500, BOOM1000, V75) — Deriv
+   MT5's exact synthetic-index symbol strings vary by account.
+
 ## Testing
 
 ```bash
@@ -343,6 +379,11 @@ Deriv's own demo id). Enable it with `MARKET_DATA_PROVIDER=deriv`.
   again once. Acceptable for a single-instance local deployment; would
   need moving that state into the DB for a multi-instance deployment.
 - No authentication/users yet — single-user local development only.
+- The MT5 EA (`mt5/`) hasn't been compiled or run — there's no MQL5
+  toolchain available in the environment it was written in. It's built
+  carefully against MetaQuotes' documented APIs, but MetaEditor's
+  compiler is the first real check it gets; see `mt5/README.md` for the
+  one spot most likely to need a fix.
 
 ## License
 
