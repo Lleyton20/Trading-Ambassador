@@ -44,6 +44,13 @@ export default defineConfig({
     }),
   ],
   server: {
+    // Bound to all interfaces (not just localhost) so the dashboard is
+    // reachable from a phone on the same WiFi network, e.g.
+    // http://<this-machine's-LAN-IP>:5173 - find it with
+    // `ipconfig getifaddr en0` on Mac. /api still proxies to the backend
+    // over loopback on this same machine either way, so no CORS setup is
+    // needed for LAN access.
+    host: true,
     proxy: {
       '/api': 'http://127.0.0.1:8000',
     },
