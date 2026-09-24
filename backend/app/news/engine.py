@@ -2,14 +2,6 @@
 Economic calendar engine: today's events sorted high->low impact, and
 upcoming high-impact events - the two views the dashboard's news panel
 needs.
-
-WHY SYNTHETIC INDICES ARE NEVER MAPPED TO A NEWS EVENT
----------------------------------------------------------
-Deriv's Volatility/Boom/Crash indices are synthetic - algorithmically
-generated, not derived from real-world market activity - so no real-world
-economic release "affects" them the way an NFP print affects EURUSD. Not
-mapping them below is a deliberate choice, not an oversight (same
-"no hidden assumptions" rule the rest of this app follows).
 """
 from __future__ import annotations
 
@@ -20,8 +12,7 @@ from app.news.finnhub_client import EconomicEvent, FinnhubUnavailableError, fetc
 
 _IMPACT_RANK = {"high": 0, "medium": 1, "low": 2}
 
-# Which of our instruments a release from this country can move - Forex
-# majors only, see module docstring for why synthetic indices are absent.
+# Which of our instruments a release from this country can move.
 _COUNTRY_TO_SYMBOLS: dict[str, list[str]] = {
     "US": ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"],
     "EU": ["EURUSD"],

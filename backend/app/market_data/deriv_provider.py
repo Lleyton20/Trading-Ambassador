@@ -3,11 +3,12 @@ Live market-data provider backed by Deriv's public WebSocket API.
 
 WHY DERIV AND NOT MT5
 ----------------------
-`instruments.py` covers both Forex majors and Deriv's synthetic indices.
-Deriv's API serves candle history for both from a single connection, and
-its market-data endpoints (active_symbols, ticks_history) need no API
-token or login — only a public `app_id`. MetaTrader5's official Python
-package is Windows-only, so it isn't a real option here.
+Deriv's forex quotes are real, broker-sourced prices (not synthetic —
+only their Volatility/Boom/Crash indices are, and those aren't in this
+project's current scope; see instruments.py). Its market-data endpoints
+(active_symbols, ticks_history) need no API token or login — only a
+public `app_id`. MetaTrader5's official Python package is Windows-only,
+so it isn't a real option here.
 
 WHY SYNCHRONOUS
 ----------------
@@ -20,9 +21,7 @@ SYMBOL CODES
 -------------
 Verified live against `ticks_history` (not guessed, and not from
 `active_symbols`, which returns an empty list for this app_id without a
-logged-in session). Deriv has renamed some synthetic indices with an "N"
-suffix in the past; that suffix currently returns "Symbol invalid" for
-these instruments, so the mapping below uses the plain codes.
+logged-in session).
 """
 from __future__ import annotations
 
@@ -41,11 +40,6 @@ SYMBOL_MAP: dict[str, str] = {
     "GBPUSD": "frxGBPUSD",
     "USDJPY": "frxUSDJPY",
     "XAUUSD": "frxXAUUSD",
-    "CRASH500": "CRASH500",
-    "CRASH1000": "CRASH1000",
-    "BOOM500": "BOOM500",
-    "BOOM1000": "BOOM1000",
-    "V75": "R_75",
 }
 
 # Deriv's supported candle granularities, in seconds (confirmed via the

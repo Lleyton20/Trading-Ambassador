@@ -24,7 +24,7 @@ export default defineConfig({
         name: 'Trading Ambassador',
         short_name: 'Trading Ambassador',
         description:
-          'Market intelligence and trading analysis for Forex and Deriv synthetic indices - SMC structure, confluence, news, and price-zone alerts.',
+          'Market intelligence and trading analysis for Forex - SMC structure, confluence, news, and price-zone alerts.',
         theme_color: '#0b0f14',
         background_color: '#0b0f14',
         display: 'standalone',

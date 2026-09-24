@@ -19,13 +19,15 @@ design decisions"). It only draws what the API already returns.
 
 ## A note on verification
 
-Unlike every other part of this project, this code wasn't run/compiled
-before being committed — there's no MQL5 toolchain in the environment
-this was written in. It's written carefully against MetaQuotes' own
-documented APIs, but MetaEditor's compiler is the first real check it
-gets. If it doesn't compile cleanly, the most likely spot is the
-`char`/`uchar` byte-array types in `HttpGet()` (`WebRequest` and
+There's no MQL5 toolchain in the environment this was written in, so it
+couldn't be compiled or run before being committed — it was written
+carefully against MetaQuotes' own documented APIs, but MetaEditor's
+compiler was the first real check it got. It has since been compiled and
+run live against a real Deriv MT5 chart (back when the project still
+covered synthetic indices) and confirmed working end to end - zones,
+bias, and confluence all drawing correctly from live data. If you're
+compiling it fresh and it doesn't build cleanly, the most likely spot is
+the `char`/`uchar` byte-array types in `HttpGet()` (`WebRequest` and
 `CharArrayToString`) — MQL5's own docs describe these two functions
-using different array types in places, and this couldn't be resolved
-without a compiler to test against. Fix: change `char post[]` / `char
-result[]` to `uchar post[]` / `uchar result[]`.
+using different array types in places. Fix: change `char post[]` /
+`char result[]` to `uchar post[]` / `uchar result[]`.

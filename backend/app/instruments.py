@@ -3,18 +3,21 @@ Instrument profiles.
 
 WHY THIS FILE EXISTS
 --------------------
-The master spec (section 25) is explicit: don't let Forex assumptions leak
-into synthetic-index logic (Boom/Crash/Volatility indices don't have real
-trading "sessions", don't have pips in the traditional sense, and trade
-24/7). It would be tempting to hard-code something like "1 lot = 1 unit"
-directly inside the risk engine with a comment telling the user to "adjust
-based on your broker" — but that bakes a per-instrument assumption into
-code instead of making it configurable.
+It would be tempting to hard-code something like "1 lot = 1 unit" directly
+inside the risk engine with a comment telling the user to "adjust based on
+your broker" — but that bakes a per-instrument assumption into code
+instead of making it configurable.
 
 Instead, every symbol the platform knows about is described by an explicit
 `InstrumentProfile`. Any module that needs to know "how big is a pip here"
 or "does this instrument observe Forex sessions" asks the profile instead
 of assuming.
+
+SCOPE: Forex majors only for now. `AssetClass.SYNTHETIC_INDEX` and the
+`observes_sessions` field are kept (rather than deleted) because they're
+what previously supported Deriv's synthetic indices (Volatility/Boom/Crash)
+before the project's scope narrowed to Forex — re-adding an instrument
+under that asset class later is a one-entry addition here, not a redesign.
 """
 from __future__ import annotations
 
@@ -94,66 +97,6 @@ INSTRUMENT_PROFILES: dict[str, InstrumentProfile] = {
         max_lot=50.0,
         observes_sessions=True,
         volatility_characteristics="medium-high",
-    ),
-    "CRASH500": InstrumentProfile(
-        symbol="CRASH500",
-        display_name="Crash 500 Index",
-        asset_class=AssetClass.SYNTHETIC_INDEX,
-        pip_size=1.0,
-        tick_size=0.01,
-        contract_size=1,
-        min_lot=0.2,
-        max_lot=20.0,
-        observes_sessions=False,
-        volatility_characteristics="high, sharp downward spikes",
-    ),
-    "CRASH1000": InstrumentProfile(
-        symbol="CRASH1000",
-        display_name="Crash 1000 Index",
-        asset_class=AssetClass.SYNTHETIC_INDEX,
-        pip_size=1.0,
-        tick_size=0.01,
-        contract_size=1,
-        min_lot=0.2,
-        max_lot=20.0,
-        observes_sessions=False,
-        volatility_characteristics="high, less frequent downward spikes than Crash 500",
-    ),
-    "BOOM500": InstrumentProfile(
-        symbol="BOOM500",
-        display_name="Boom 500 Index",
-        asset_class=AssetClass.SYNTHETIC_INDEX,
-        pip_size=1.0,
-        tick_size=0.01,
-        contract_size=1,
-        min_lot=0.2,
-        max_lot=20.0,
-        observes_sessions=False,
-        volatility_characteristics="high, sharp upward spikes",
-    ),
-    "BOOM1000": InstrumentProfile(
-        symbol="BOOM1000",
-        display_name="Boom 1000 Index",
-        asset_class=AssetClass.SYNTHETIC_INDEX,
-        pip_size=1.0,
-        tick_size=0.01,
-        contract_size=1,
-        min_lot=0.2,
-        max_lot=20.0,
-        observes_sessions=False,
-        volatility_characteristics="high, less frequent upward spikes than Boom 500",
-    ),
-    "V75": InstrumentProfile(
-        symbol="V75",
-        display_name="Volatility 75 Index",
-        asset_class=AssetClass.SYNTHETIC_INDEX,
-        pip_size=1.0,
-        tick_size=0.01,
-        contract_size=1,
-        min_lot=0.1,
-        max_lot=20.0,
-        observes_sessions=False,
-        volatility_characteristics="high, continuous",
     ),
 }
 

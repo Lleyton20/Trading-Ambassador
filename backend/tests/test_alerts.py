@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.alerts.watcher import ZoneAlertWatcher
 from app.database import Base
+from app.instruments import INSTRUMENT_PROFILES
 
 
 @pytest.fixture
@@ -48,7 +49,7 @@ def test_fires_alert_for_every_instrument_sitting_in_the_zone(db_session):
 
     fired = watcher.check_all_instruments(db_session, _FakeProvider(), "H1")
 
-    assert len(fired) == 9  # every instrument gets the same fixed df
+    assert len(fired) == len(INSTRUMENT_PROFILES)  # every instrument gets the same fixed df
     first = fired[0]
     assert first.zone_type == "fair_value_gap"
     assert first.direction == "bullish"
@@ -83,4 +84,4 @@ def test_refires_after_price_leaves_and_reenters_the_zone(db_session, monkeypatc
     assert away_pass == []  # no FVG at all in this flat data, zone considered "left"
 
     back_pass = watcher.check_all_instruments(db_session, _FakeProvider(), "H1")
-    assert len(back_pass) == 9  # re-entering the same zone fires again
+    assert len(back_pass) == len(INSTRUMENT_PROFILES)  # re-entering the same zone fires again

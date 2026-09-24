@@ -51,7 +51,7 @@ function App() {
         <div>
           <h1 className="text-xl font-bold text-slate-100">Trading Ambassador</h1>
           <p className="text-xs text-slate-500">
-            Evidence, not signals — structure, liquidity, and risk math for Forex &amp; Deriv synthetic indices.
+            Evidence, not signals — structure, liquidity, and risk math for Forex.
           </p>
         </div>
         <SymbolPicker

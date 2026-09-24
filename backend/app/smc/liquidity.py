@@ -18,8 +18,8 @@ Two swing highs are never bit-for-bit identical in real price data, so
 "equal" always needs a tolerance (spec section 12: "never require exact
 floating-point equality"). We use a percentage of price rather than a
 fixed pip count, again because this platform spans instruments with very
-different price scales (a EURUSD quote near 1.10 vs a Crash index near
-10,000) — a fixed absolute tolerance would be meaningless on one or the
+different price scales (a EURUSD quote near 1.10 vs an XAUUSD quote near
+4,000) — a fixed absolute tolerance would be meaningless on one or the
 other.
 """
 from __future__ import annotations

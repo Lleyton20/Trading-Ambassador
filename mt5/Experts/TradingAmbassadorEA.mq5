@@ -23,10 +23,13 @@
 //|      execution behind this, even display-only ones).             |
 //|   5. Set InpBackendSymbol if the chart's own symbol name isn't    |
 //|      exactly one of our backend's instrument keys (EURUSD,        |
-//|      GBPUSD, USDJPY, XAUUSD, CRASH500, CRASH1000, BOOM500,        |
-//|      BOOM1000, V75) - Deriv MT5's exact synthetic-index symbol    |
-//|      strings vary and can't be hardcoded here without a live      |
-//|      account to check against.                                    |
+//|      GBPUSD, USDJPY, XAUUSD) - e.g. a broker suffix like           |
+//|      "EURUSD.m" needs mapping back to the plain key.               |
+//|                                                                    |
+//| Forex majors only - any broker's MT5 works, no special account    |
+//| needed (this project previously also covered Deriv's synthetic    |
+//| indices, which required a Deriv-specific MT5 account; scope has   |
+//| narrowed to Forex, see backend/app/instruments.py).                |
 //+------------------------------------------------------------------+
 #property copyright "Trading Ambassador"
 #property link      "https://github.com/Lleyton20/Trading-Ambassador"

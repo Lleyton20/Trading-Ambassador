@@ -20,7 +20,7 @@ USAGE
     cd backend
     pip install -r requirements-dev.txt
     python scripts/plot_analysis.py --symbol EURUSD --timeframe H1
-    python scripts/plot_analysis.py --symbol V75 --timeframe H1 --provider deriv
+    python scripts/plot_analysis.py --symbol GBPUSD --timeframe H1 --provider deriv
     python scripts/plot_analysis.py --symbol EURUSD --timeframe H1 --show
 
 Add --show to open an interactive window; otherwise it just saves a PNG

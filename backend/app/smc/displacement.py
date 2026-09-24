@@ -10,11 +10,10 @@ any arbitrary candle (section 13: "do not label every opposite candle as
 an order block").
 
 We measure "unusually large" relative to ATR rather than a fixed price
-amount, specifically because this platform covers both Forex (small,
-steady price moves) and Deriv synthetic indices (large, spiky moves) —
-a fixed threshold that works for EURUSD would be meaningless for a Crash
-index. Comparing against the instrument's OWN recent ATR keeps the
-definition meaningful across very different volatility regimes.
+amount, since a fixed threshold that works for a low-volatility pair like
+EURUSD would be meaningless for a higher-volatility instrument like
+XAUUSD. Comparing against the instrument's OWN recent ATR keeps the
+definition meaningful across different volatility regimes.
 """
 from __future__ import annotations
 

@@ -2,9 +2,8 @@
 
 [![Tests](https://github.com/Lleyton20/Trading-Ambassador/actions/workflows/tests.yml/badge.svg)](https://github.com/Lleyton20/Trading-Ambassador/actions/workflows/tests.yml)
 
-A market intelligence and trading **analysis** platform for Forex and Deriv
-synthetic indices (Volatility, Boom, and Crash indices), built around
-Smart Money Concepts (SMC), session analysis, and risk management.
+A market intelligence and trading **analysis** platform for Forex, built
+around Smart Money Concepts (SMC), session analysis, and risk management.
 
 **Trading Ambassador presents evidence — it does not generate BUY/SELL
 signals.** Every endpoint answers a question ("what is the market
@@ -94,9 +93,9 @@ phase ships as a working, tested slice.
   docstring for the reasoning.
 - **Order blocks**: created only from a confirmed BOS/CHoCH whose
   confirming candle clears a displacement threshold (ATR-relative, so it
-  scales sensibly between low-volatility Forex and spiky synthetic
-  indices) — not from "the last opposite candle" indiscriminately.
-  Tracks mitigation state and retest count.
+  scales sensibly across very different volatility profiles — a EURUSD
+  candle vs. a Gold candle) — not from "the last opposite candle"
+  indiscriminately. Tracks mitigation state and retest count.
 - **Fair Value Gaps**: three-candle detection with a mitigation
   *percentage* (not just filled/unfilled), so a partially-filled gap is
   reported as such.
@@ -113,10 +112,9 @@ phase ships as a working, tested slice.
   each instrument's real contract size/lot rules instead of a guessed
   constant.
 - **Live market data**: a `DerivMarketDataProvider` alongside the mock
-  fixture, backed by Deriv's public WebSocket API — covers both Forex
-  majors and the synthetic indices from one connection, no API token
-  required. Switch to it with `MARKET_DATA_PROVIDER=deriv`; see
-  `app/market_data/deriv_provider.py`.
+  fixture, backed by Deriv's public WebSocket API — real, broker-sourced
+  Forex quotes (not synthetic), no API token required. Switch to it with
+  `MARKET_DATA_PROVIDER=deriv`; see `app/market_data/deriv_provider.py`.
 - **Persistence**: swing points, structure events, order blocks, FVGs,
   and liquidity levels/sweeps are upserted into their DB tables as a side
   effect of the `/smc` and `/liquidity` endpoints (`app/persistence.py`)
@@ -131,9 +129,8 @@ phase ships as a working, tested slice.
 - **Economic news calendar**: today's releases sorted high→low impact plus
   upcoming high-impact releases, via Finnhub (`app/news/`), mapped to the
   instruments they actually affect (USD news affects every USD pair +
-  gold; Deriv's synthetic indices are deliberately never mapped to any
-  news event — they're synthetic, not news-driven). Degrades to
-  `available: false` rather than erroring if Finnhub isn't configured.
+  gold). Degrades to `available: false` rather than erroring if Finnhub
+  isn't configured.
 - **Price-in-zone alerts**: a background watcher (`app/alerts/`) checks
   every instrument's current price against unmitigated order
   blocks/FVGs and fires an alert — persisted to the DB and sent to
@@ -219,7 +216,7 @@ Then visit `http://127.0.0.1:8000/docs` for interactive API docs, or try:
 ```bash
 curl http://127.0.0.1:8000/api/markets
 curl "http://127.0.0.1:8000/api/markets/EURUSD/analysis"
-curl "http://127.0.0.1:8000/api/markets/CRASH500/smc?timeframe=H1"
+curl "http://127.0.0.1:8000/api/markets/GBPUSD/smc?timeframe=H1"
 curl "http://127.0.0.1:8000/api/markets/EURUSD/liquidity?timeframe=H1"
 curl "http://127.0.0.1:8000/api/markets/EURUSD/confluence?timeframe=H1"
 ```
@@ -301,9 +298,8 @@ MT5 chart, while the dashboard stays open separately for news and alerts.
 1. Install MT5. On Mac, use the [official installer](https://www.metatrader5.com/en/download)
    (it's a Wine wrapper, not a VM — it shares your Mac's network stack, so
    `http://127.0.0.1:8000` reaches a backend running on the same machine
-   with no extra networking setup). For the synthetic indices
-   (V75, Boom/Crash), you need a **Deriv MT5** account specifically — a
-   regular broker's MT5 server doesn't carry those symbols at all.
+   with no extra networking setup). Any broker's MT5 works — Forex majors
+   only, no special account needed.
 2. `backend/.env`: `MARKET_DATA_PROVIDER=deriv`, and keep the backend
    running continuously (`uvicorn app.main:app`) — the EA has nothing
    to poll otherwise.
@@ -314,13 +310,13 @@ MT5 chart, while the dashboard stays open separately for news and alerts.
    (find the data folder via **File → Open Data Folder** in MT5).
 5. **MetaEditor** (F4) → open the EA → compile (F7). See
    `mt5/README.md` for the one spot most likely to need a fix on first
-   compile (this file couldn't be tested against a real MQL5 compiler).
+   compile if you're building it fresh.
 6. Drag the compiled EA onto a chart, enable **Auto Trading** (MT5 gates
    all EA execution behind this, even display-only ones like this one).
    Set the EA's `InpBackendSymbol` input if the chart's symbol name
    doesn't exactly match one of our instrument keys (EURUSD, GBPUSD,
-   USDJPY, XAUUSD, CRASH500, CRASH1000, BOOM500, BOOM1000, V75) — Deriv
-   MT5's exact synthetic-index symbol strings vary by account.
+   USDJPY, XAUUSD) — e.g. a broker suffix like "EURUSD.m" needs mapping
+   back to the plain key.
 
 ## Testing
 
@@ -370,10 +366,10 @@ the default) if you'd rather not hit live Deriv data.
 fixture** — clearly labeled as such in code, never used as a stand-in for
 real market data claims, and still the default (`MARKET_DATA_PROVIDER=mock`)
 so the project runs with zero setup. `app/market_data/deriv_provider.py`
-is a live provider backed by Deriv's public WebSocket API: it covers both
-Forex majors and Deriv's synthetic indices from one connection, and needs
-no API token for market data (only a public `app_id`, defaulted to
-Deriv's own demo id). Enable it with `MARKET_DATA_PROVIDER=deriv`.
+is a live provider backed by Deriv's public WebSocket API: real,
+broker-sourced Forex quotes, and needs no API token for market data (only
+a public `app_id`, defaulted to Deriv's own demo id). Enable it with
+`MARKET_DATA_PROVIDER=deriv`.
 
 ## Roadmap
 
