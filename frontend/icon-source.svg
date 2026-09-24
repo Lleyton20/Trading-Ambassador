@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0b0f14"/>
+  <!-- three candlesticks: a dip (red) followed by an advance (light blue) -
+       same bias palette as frontend/src/colors.ts. Kept inside a ~65%
+       safe zone so this doubles as a maskable icon. -->
+  <g stroke-linecap="round">
+    <line x1="168" y1="260" x2="168" y2="360" stroke="#ef4444" stroke-width="10"/>
+    <rect x="144" y="280" width="48" height="60" rx="6" fill="#ef4444"/>
+
+    <line x1="256" y1="160" x2="256" y2="320" stroke="#7dd3fc" stroke-width="10"/>
+    <rect x="232" y="180" width="48" height="120" rx="6" fill="#7dd3fc"/>
+
+    <line x1="344" y1="120" x2="344" y2="240" stroke="#7dd3fc" stroke-width="10"/>
+    <rect x="320" y="140" width="48" height="80" rx="6" fill="#7dd3fc"/>
+  </g>
+</svg>

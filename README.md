@@ -182,7 +182,10 @@ phase ships as a working, tested slice.
 
 - **Backend**: Python, FastAPI, Pydantic v2, SQLAlchemy 2.0, pandas, NumPy
 - **Frontend**: React, TypeScript, Vite, Tailwind CSS,
-  [lightweight-charts](https://github.com/tradingview/lightweight-charts)
+  [lightweight-charts](https://github.com/tradingview/lightweight-charts) —
+  installable as a PWA via `vite-plugin-pwa`
+- **MT5**: an MQL5 Expert Advisor (`mt5/`) mirrors the same SMC zones/bias
+  natively on an MT5 chart, display-only
 - **Database**: SQLite for local development (zero setup); PostgreSQL-ready
   by changing one environment variable (`DATABASE_URL`)
 - **External APIs**: Deriv (market data), Finnhub (economic calendar),
@@ -239,6 +242,23 @@ Open `http://localhost:5173` — the Vite dev server proxies `/api/*` to
 is needed in dev. Works immediately against the mock provider; the news
 panel shows "unavailable" and the alerts panel shows "no alerts yet"
 until you configure Finnhub / turn on alerts (see below).
+
+### Install as an app
+
+The dashboard is a PWA (`vite-plugin-pwa`) — the same page at
+`http://localhost:5173` can be installed as a standalone app instead of
+just opened as a browser tab: **Chrome/Edge** — an install icon appears
+in the address bar (or menu → "Install Trading Ambassador"). **Safari on
+iOS** — Share → "Add to Home Screen". It gets its own window/icon and
+launches without browser chrome, but it's still the exact same webpage —
+one codebase, no separate app to maintain. Note that installing from a
+*phone* (as opposed to the same Mac running the dev server) needs the
+dashboard actually deployed somewhere with HTTPS — `localhost` only
+installs for browsers running on this machine.
+
+The service worker only precaches the app's own JS/CSS/HTML/icons, never
+`/api/*` — this is a live dashboard, so market data is never served stale
+from a cache.
 
 ### Economic calendar
 
