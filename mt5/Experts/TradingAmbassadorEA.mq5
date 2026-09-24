@@ -128,9 +128,9 @@ string BackendTimeframe()
   }
 
 //+------------------------------------------------------------------+
-//| Minimal, deliberately narrow: just enough to survive a space in  |
-//| a symbol name (Deriv's synthetic indices are commonly displayed  |
-//| with spaces, e.g. "Volatility 75"). Not a general URL encoder.   |
+//| Minimal, deliberately narrow: just enough to survive a space if a |
+//| broker's display name for an instrument happens to have one. Not  |
+//| a general URL encoder.                                             |
 //+------------------------------------------------------------------+
 string UrlEncodeSymbol(string s)
   {

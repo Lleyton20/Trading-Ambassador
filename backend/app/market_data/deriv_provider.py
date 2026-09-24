@@ -130,10 +130,10 @@ def _candles_to_frame(candles: list[dict]) -> pd.DataFrame:
             "high": [float(c["high"]) for c in candles],
             "low": [float(c["low"]) for c in candles],
             "close": [float(c["close"]) for c in candles],
-            # Deriv's synthetic-index/forex-CFD candles carry no real trade
-            # volume; keep the column (validate_candles doesn't require it)
-            # so callers never have to special-case a provider that's
-            # missing a column the interface promises.
+            # Deriv's forex-CFD candles carry no real trade volume; keep
+            # the column (validate_candles doesn't require it) so callers
+            # never have to special-case a provider that's missing a
+            # column the interface promises.
             "volume": [0.0] * len(candles),
         },
         index=timestamps,

@@ -40,9 +40,9 @@ def validate_candles(df: pd.DataFrame, *, max_price_jump_pct: float = 0.25) -> V
 
     `max_price_jump_pct` is a sanity check for "extreme erroneous prices"
     (e.g. a bad tick reporting a 10x price spike) — real displacement
-    candles on volatile synthetic indices can be large, so this is
-    intentionally generous by default rather than flagging normal
-    volatility as bad data.
+    candles around major news (NFP, central bank surprises) can be large,
+    so this is intentionally generous by default rather than flagging
+    normal volatility as bad data.
     """
     result = ValidationResult()
 

@@ -17,6 +17,11 @@ the person using it.
 bullish = light blue), a live confluence score, an economic-calendar
 panel, and price-in-zone alerts, all built on the API below.*
 
+<img src="docs/mobile-demo.png" alt="The same dashboard at phone width" width="320" />
+
+*Same app, same URL, no separate build — installable as a PWA (see
+"Install as an app" below).*
+
 ## Disclaimer
 
 Trading Ambassador provides analytical and educational information. It
@@ -240,6 +245,13 @@ is needed in dev. Works immediately against the mock provider; the news
 panel shows "unavailable" and the alerts panel shows "no alerts yet"
 until you configure Finnhub / turn on alerts (see below).
 
+**On your phone**, same WiFi network as this machine: `vite.config.ts`
+binds the dev server to all interfaces (`server.host: true`), so
+`http://<this-machine's-LAN-IP>:5173` works from any device on the same
+network — find the IP with `ipconfig getifaddr en0` on Mac. The `/api`
+proxy still talks to the backend over loopback on this machine either
+way, so no extra CORS setup is needed for that either.
+
 ### Install as an app
 
 The dashboard is a PWA (`vite-plugin-pwa`) — the same page at
@@ -343,6 +355,8 @@ Saves a PNG under `scripts/output/` by default; pass `--show` to also open
 an interactive window. Works with the mock fixture too (`--provider mock`,
 the default) if you'd rather not hit live Deriv data.
 
+![Annotated EURUSD H1 chart from plot_analysis.py: swings, BOS/CHoCH, order blocks, FVGs, liquidity levels](docs/analysis-demo.png)
+
 ## API endpoints
 
 | Endpoint | Purpose |
@@ -395,11 +409,13 @@ a public `app_id`, defaulted to Deriv's own demo id). Enable it with
   again once. Acceptable for a single-instance local deployment; would
   need moving that state into the DB for a multi-instance deployment.
 - No authentication/users yet — single-user local development only.
-- The MT5 EA (`mt5/`) hasn't been compiled or run — there's no MQL5
-  toolchain available in the environment it was written in. It's built
-  carefully against MetaQuotes' documented APIs, but MetaEditor's
-  compiler is the first real check it gets; see `mt5/README.md` for the
-  one spot most likely to need a fix.
+- Deriv's market-data endpoints don't need an API token, but the shared
+  public demo `app_id` (`1089`) this project defaults to is used by a huge
+  number of unrelated tutorials/apps and can get rate-limited or blocked
+  from that collective load — it's not a reliability guarantee. Registering
+  your own free `app_id` at [api.deriv.com](https://api.deriv.com) and
+  setting `DERIV_APP_ID` in `.env` is the real fix; `mock` is always the
+  safe fallback either way.
 
 ## License
 

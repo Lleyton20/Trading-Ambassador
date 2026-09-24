@@ -119,14 +119,16 @@ class Settings(BaseSettings):
     confluence_weight_session: int = 1
 
     # --- Market data provider ---------------------------------------------
-    # "mock" (default, zero setup) or "deriv" (live data via Deriv's public
-    # WebSocket API — covers both Forex majors and the synthetic indices,
-    # see app/market_data/deriv_provider.py). Chosen over MetaTrader5
-    # because MT5's official Python package is Windows-only.
+    # "mock" (default, zero setup) or "deriv" (live, real Forex data via
+    # Deriv's public WebSocket API, see app/market_data/deriv_provider.py).
+    # Chosen over MetaTrader5 because MT5's official Python package is
+    # Windows-only.
     market_data_provider: str = "mock"
     # Deriv's market-data endpoints (active_symbols, ticks_history) need no
     # API token, only an app_id. 1089 is Deriv's well-known public demo
-    # app_id; register your own at api.deriv.com for production use.
+    # app_id, but it's shared by countless unrelated tutorials/apps and can
+    # get rate-limited or blocked from that collective load - register
+    # your own free one at api.deriv.com for actual reliability.
     deriv_app_id: str = "1089"
     deriv_request_timeout: float = 10.0
 
